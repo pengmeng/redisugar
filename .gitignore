@@ -1,6 +1,7 @@
 # MP
 .DS_Store
 venv/
+.idea/
 
 
 # Byte-compiled / optimized / DLL files

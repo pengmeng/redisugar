@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-__author__ = 'mengpeng'
-import warnings
 import redis
+from collections import Iterable
 
 
 class RediSugarException(Exception):
@@ -9,17 +8,17 @@ class RediSugarException(Exception):
 
 
 class RediSugar(object):
-    _Pool = None
+    _Pool = {}
 
     @staticmethod
-    def getSugar():
-        if not RediSugar._Pool:
-            RediSugar._Pool = redis.ConnectionPool(host='localhost', port=6379, db=0)
-        r = redis.Redis(connection_pool=RediSugar._Pool)
+    def getSugar(host='localhost', port=6379, db=0):
+        if (host, port, db) not in RediSugar._Pool:
+            RediSugar._Pool[(host, port, db)] = redis.ConnectionPool(host=host, port=port, db=db)
+        r = redis.Redis(connection_pool=RediSugar._Pool[(host, port, db)])
         try:
             return r.ping() and RediSugar(r)
         except redis.ConnectionError:
-            raise RediSugarException('Connect to redis server failed')
+            raise RediSugarException('Cannot connect to redis server')
 
     def __init__(self, _redis):
         self.redis = _redis
@@ -27,29 +26,34 @@ class RediSugar(object):
 
 class rlist(object):
 
-    def __init__(self, redisugar, key, iterable=None):
+    def __init__(self, redisugar, key, iterable=None, dtype=str):
         self.redis = redisugar.redis
         self.key = key
+        self.dtype = dtype
         if iterable:
-            self.redis.rpush(self.key, *list(iterable))
+            self.extend(iterable)
 
     def __len__(self):
         return self.redis.llen(self.key)
 
     def __add__(self, other):
-        if not isinstance(other, list) or not isinstance(other, rlist):
+        if not isinstance(other, (list, rlist)):
             raise RediSugarException('TypeError: can only concatenate list or rlist to rlist')
         if isinstance(other, rlist):
             other = other.copy()
         return self.copy() + other
 
     def __iadd__(self, other):
-        if not isinstance(other, list) or not isinstance(other, rlist):
+        if not isinstance(other, (list, rlist)):
             raise RediSugarException('TypeError: can only concatenate list or rlist to rlist')
         if isinstance(other, rlist):
-            other = other.copy()
-        # avoid copy into memory later
-        self.extend(other)
+            i, _len = 0, len(other)
+            while i < _len:
+                self.append(other[i])
+                i += 1
+        else:
+            self.extend(other)
+        return self
 
     def __mul__(self, other):
         if not isinstance(other, int):
@@ -59,21 +63,24 @@ class rlist(object):
     def __imul__(self, other):
         if not isinstance(other, int):
             raise RediSugarException('TypeError: can\'t multiply sequence by non-int type')
-        # avoid copy into memory later
         if other <= 0:
             self.clear()
         elif other == 1:
             pass
         else:
-            tmp = self.copy()
+            _len = self.__len__()
             for i in range(0, other - 1):
-                self.extend(tmp)
+                j = 0
+                while j < _len:
+                    self.append(self.redis.lindex(self.key, j))
+                    j += 1
+        return self
 
     def __iter__(self):
-        _len = self.__len__()
-        for i in range(0, _len):
-            yield self.redis.lindex(self.key, i)
-            # _len = self.__len__() # in case of length of the list is changed
+        i = 0
+        while i < self.__len__():
+            yield self[i]
+            i += 1
 
     def _check_index(self, item):
         if not isinstance(item, int):
@@ -84,36 +91,55 @@ class rlist(object):
 
     def __getitem__(self, key):
         self._check_index(key)
-        return self.redis.lindex(self.key, key)
+        return self.dtype(self.redis.lindex(self.key, key))
 
     def __setitem__(self, key, value):
         self._check_index(key)
         self.redis.lset(self.key, key, value)
 
     def __contains__(self, item):
-        warnings.warn('Using of this function is NOT encouraged.')
-        tmp = self.copy()
-        flag = item in tmp
-        del tmp
-        return flag
+        i = 0
+        while i < self.__len__():
+            if self[i] == item:
+                return True
+            i += 1
+        return False
 
     def append(self, item):
         self.redis.rpush(self.key, item)
 
     def extend(self, iterable):
+        if not isinstance(iterable, Iterable):
+            raise RediSugarException('TypeError: \'{0}\' object is not iterable'.format(type(iterable)))
         self.redis.rpush(self.key, *list(iterable))
 
-    def index(self, item):
-        warnings.warn('Using of this function is NOT encouraged.')
-        tmp = self.copy()
-        i = tmp.index(item)
-        del tmp
-        return i
+    def index(self, item, start=0, end=None):
+        if start < 0:
+            start += self.__len__()
+        end = self.__len__() if end is None else end
+        if end < 0:
+            end += self.__len__()
+        if end < start:
+            raise RediSugarException('ValueError: {0} is not in list'.format(item))
+        i = start
+        while i < min(end, self.__len__()):
+            if self[i] == item:
+                return i
+            i += 1
+        raise RediSugarException('ValueError: {0} is not in list'.format(item))
 
-    def insert(self, pivot, item, pos='after'):
-        if pos not in ['after', 'before']:
-            raise RediSugarException('SyntaxError: pos can only be after or before')
-        self.redis.linsert(self.key, pos, pivot, item)
+    def insert(self, index, item):
+        if index < 0:
+            index += self.__len__()
+        if index >= self.__len__():
+            self.append(item)
+        else:
+            self.redis.rpush(self.key, self.redis.lindex(self.key, -1))
+            i = self.__len__() - 2
+            while i > index:
+                self.redis.lset(self.key, i, self.redis.lindex(self.key, i - 1))
+                i -= 1
+            self.redis.lset(self.key, index, item)
 
     def pop(self, pos=-1):
         if pos not in [0, -1]:
@@ -121,17 +147,9 @@ class rlist(object):
         if self.__len__() == 0:
             raise RediSugarException('IndexError: pop from empty list')
         if pos == 0:
-            self.redis.lpop(self.key)
+            return self.dtype(self.redis.lpop(self.key))
         elif pos == -1:
-            self.redis.rpop(self.key)
-
-    def popall(self):
-        _len = self.__len__()
-        if _len == 0:
-            raise RediSugarException('IndexError: pop from empty list')
-        temp = self.copy()
-        self.clear()
-        return temp
+            return self.dtype(self.redis.rpop(self.key))
 
     def push(self, item, pos=-1):
         if pos not in [0, -1]:
@@ -142,26 +160,26 @@ class rlist(object):
             self.redis.rpush(self.key, item)
 
     def remove(self, item, count=1):
-        self.redis.lrem(self.key, item, count)
+        flag = self.redis.lrem(self.key, item, count)
+        if flag == 0:
+            raise RediSugarException('ValueError: rlist.remove(x): {0} not in rlist'.format(item))
 
     def reverse(self):
         tmp_key = self.key + '-tmp'
         while self.__len__() != 0:
-            self.redis.rpoplpush(self.key, tmp_key)
+            tmp = self.redis.rpop(self.key)
+            self.redis.rpush(tmp_key, tmp)
         self.redis.rename(tmp_key, self.key)
 
-    def sort(self, reverse=False, alpha=False, inplace=False):
-        if inplace:
-            self.redis.sort(self.key, alpha=alpha, desc=reverse, store=self.key)
-        else:
-            self.redis.sort(self.key, alpha=alpha, desc=reverse)
+    def sort(self, reverse=False, alpha=False):
+        self.redis.sort(self.key, alpha=alpha, desc=reverse, store=self.key)
 
     def copy(self):
-        return self.redis.lrange(self.key, 0, -1)
+        temp = self.redis.lrange(self.key, 0, -1)
+        return map(self.dtype, temp)
 
     def clear(self):
-        _len = self.__len__()
-        self.redis.ltrim(self.key, _len, _len)
+        self.redis.delete(self.key)
 
 
 class rset(object):
