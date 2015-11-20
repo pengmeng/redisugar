@@ -198,6 +198,7 @@ class TestRlist(TestCase):
         l1.clear()
         l1.extend([0, 1, 2])
         self.assertEqual([0, 1, 2] * 3, l1 * 3)
+        self.assertEqual(3 * [0, 1, 2], 3 * l1)
         self.assertEqual([], l1 * 0)
         l1.clear()
 

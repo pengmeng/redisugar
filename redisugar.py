@@ -53,12 +53,15 @@ class rlist(object):
 
     def __mul__(self, other):
         if not isinstance(other, int):
-            raise TypeError('can\'t multiply sequence by non-int type')
+            raise TypeError('can\'t multiply sequence by non-int of type ' + str(type(other))[7: -2])
         return self.copy() * other
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
 
     def __imul__(self, other):
         if not isinstance(other, int):
-            raise TypeError('can\'t multiply sequence by non-int type')
+            raise TypeError('can\'t multiply sequence by non-int of type ' + str(type(other))[7: -2])
         if other <= 0:
             self.clear()
         elif other == 1:
@@ -77,6 +80,18 @@ class rlist(object):
         while i < self.__len__():
             yield self[i]
             i += 1
+
+    def __format__(self, format_spec):
+        if isinstance(format_spec, unicode):
+            return unicode(str(self))
+        else:
+            return str(self)
+
+    def __repr__(self):
+        return '<redisugar.rlist object with key: ' + self.key + '>'
+
+    def __str__(self):
+        return str(self.copy())
 
     def _check_index(self, item):
         if not isinstance(item, int):
