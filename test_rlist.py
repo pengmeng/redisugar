@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from unittest import TestCase
 from redisugar import RediSugar
-from redisugar import RediSugarException
 from redisugar import rlist
 
 
@@ -14,10 +13,10 @@ class TestRlist(TestCase):
 
     def test__check_index(self):
         l = rlist(self.__class__.redisugar, 'test_dummy')
-        self.assertRaises(RediSugarException, l._check_index, '1')
+        self.assertRaises(TypeError, l._check_index, '1')
         l.clear()
         l.extend([0, 1])
-        self.assertRaises(RediSugarException, l._check_index, 5)
+        self.assertRaises(IndexError, l._check_index, 5)
 
     def test_append(self):
         l = rlist(self.__class__.redisugar, 'test_append', dtype=int)
@@ -31,7 +30,7 @@ class TestRlist(TestCase):
         l = rlist(self.__class__.redisugar, 'test_extend', dtype=int)
         l.clear()
         l.extend([0, 1, 2, 3])
-        self.assertRaises(RediSugarException, l.extend, 2)
+        self.assertRaises(TypeError, l.extend, 2)
         self.assertEqual([0, 1, 2, 3], l.copy())
         l.clear()
 
@@ -40,11 +39,12 @@ class TestRlist(TestCase):
         l.clear()
         l.extend([0, 1, 2, 3, 3, 4, 3, 4, 5, 6])
         self.assertEqual(2, l.index(2))
-        self.assertRaises(RediSugarException, l.index, 100)
-        self.assertRaises(RediSugarException, l.index, 5, 2, 1)
+        self.assertRaises(ValueError, l.index, 100)
+        self.assertRaises(ValueError, l.index, 5, 2, 1)
         self.assertEqual(6, l.index(3, 5))
         self.assertEqual(6, l.index(3, -5))
         self.assertEqual(9, l.index(6, 5))
+        self.assertEqual(9, l.index(6, 9))
         l.clear()
 
     def test_insert(self):
@@ -62,8 +62,8 @@ class TestRlist(TestCase):
     def test_pop(self):
         l = rlist(self.__class__.redisugar, 'test_pop', dtype=int)
         l.clear()
-        self.assertRaises(RediSugarException, l.pop)
-        self.assertRaises(RediSugarException, l.pop, 10)
+        self.assertRaises(IndexError, l.pop)
+        self.assertRaises(IndexError, l.pop, 10)
         l.extend([0, 1, 2, 3])
         self.assertEqual(3, l.pop())
         self.assertEqual(2, l.pop())
@@ -72,7 +72,7 @@ class TestRlist(TestCase):
     def test_push(self):
         l = rlist(self.__class__.redisugar, 'test_push', dtype=int)
         l.clear()
-        self.assertRaises(RediSugarException, l.push, 10, 10)
+        self.assertRaises(ValueError, l.push, 10, 10)
         l.push(1)
         l.push(2)
         l.push(0, pos=0)
@@ -87,7 +87,7 @@ class TestRlist(TestCase):
         self.assertEqual(6, len(l))
         l.remove(1, 0)
         self.assertEqual(3, len(l))
-        self.assertRaises(RediSugarException, l.remove, 100)
+        self.assertRaises(ValueError, l.remove, 100)
         l.clear()
 
     def test_reverse(self):
@@ -125,6 +125,15 @@ class TestRlist(TestCase):
         self.assertEqual(3, l[3])
         self.assertEqual(3, l[-1])
         self.assertEqual(2, l[-2])
+        self.assertEqual([], l[3:2])
+        self.assertEqual([0, 1, 2], l[:3])
+        self.assertEqual([0, 1, 2], l[0:3])
+        self.assertEqual([0, 1, 2], l[:-1])
+        self.assertEqual([0, 1], l[:-2])
+        self.assertEqual([0, 1, 2, 3], l[:])
+        self.assertEqual([0, 2], l[::2])
+        self.assertEqual([3, 2, 1, 0], l[::-1])
+        self.assertEqual([3, 1], l[::-2])
         l.clear()
 
     def test___setitem__(self):
@@ -135,6 +144,17 @@ class TestRlist(TestCase):
         l[-1] = 100
         self.assertEqual(100, l[2])
         self.assertEqual(100, l[3])
+        self.assertEqual([0, 1, 100, 100], l.copy())
+        l[1:2] = [99]
+        self.assertEqual([0, 99, 100, 100], l.copy())
+        l[1:] = [0, 1, 2, 3, 4, 5]
+        self.assertEqual([0, 0, 1, 2, 3, 4, 5], l.copy())
+        l[0:2] = [1, 2, 3, 4]
+        self.assertEqual([1, 2, 3, 4, 1, 2, 3, 4, 5], l.copy())
+        l[0:7:2] = [9, 9, 9, 9]
+        self.assertEqual([9, 2, 9, 4, 9, 2, 9, 4, 5], l.copy())
+        l[:] = []
+        self.assertEqual([], l.copy())
         l.clear()
 
     def test___contains__(self):
@@ -199,4 +219,34 @@ class TestRlist(TestCase):
         for x in iter(l):
             tmp.append(x)
         self.assertEqual(tmp, l.copy())
+        l.clear()
+
+    def test_count(self):
+        l = rlist(self.__class__.redisugar, 'test_count', dtype=int)
+        l.clear()
+        l.extend([0, 1, 2, 3, 4, 4, 4, 4])
+        self.assertEqual(1, l.count(1))
+        self.assertEqual(4, l.count(4))
+
+    def test___delitem__(self):
+        l = rlist(self.__class__.redisugar, 'test_del', dtype=int)
+        l.clear()
+        l.extend([0, 1, 2, 3, 4, 4, 4, 4])
+        del l[0]
+        self.assertEqual([1, 2, 3, 4, 4, 4, 4], l.copy())
+        del l[-1]
+        self.assertEqual([1, 2, 3, 4, 4, 4], l.copy())
+        del l[3]
+        self.assertEqual([1, 2, 3, 4, 4], l.copy())
+        del l[:]
+        self.assertEqual([], l.copy())
+        l.extend([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+        del l[1:6:2]
+        self.assertEqual([0, 2, 4, 6, 7, 8, 9], l.copy())
+        del l[2:6]
+        self.assertEqual([0, 2, 9], l.copy())
+        del l[:-1]
+        self.assertEqual([9], l.copy())
+        del l[-1]
+        self.assertEqual([], l.copy())
         l.clear()

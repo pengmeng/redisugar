@@ -1,2 +1,2 @@
 # redisugar
-Pythonic redis data model based on reds-py
+Pythonic redis interface based on redis-py
