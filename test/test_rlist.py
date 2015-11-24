@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from unittest import TestCase
+
 from redisugar import RediSugar
 from redisugar import rlist
 

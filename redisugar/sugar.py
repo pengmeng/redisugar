@@ -1,23 +1,24 @@
 # -*- coding: utf-8 -*-
 import redis
 from collections import Iterable
+from collections import Mapping
 
 
 class RediSugar(object):
     _Pool = {}
 
-    @staticmethod
-    def getSugar(host='localhost', port=6379, db=0):
+    @classmethod
+    def getSugar(cls, host='localhost', port=6379, db=0):
         if (host, port, db) not in RediSugar._Pool:
-            RediSugar._Pool[(host, port, db)] = redis.ConnectionPool(host=host, port=port, db=db)
-        r = redis.Redis(connection_pool=RediSugar._Pool[(host, port, db)])
+            cls._Pool[(host, port, db)] = redis.ConnectionPool(host=host, port=port, db=db)
+        r = redis.Redis(connection_pool=cls._Pool[(host, port, db)])
         try:
-            return r.ping() and RediSugar(r)
+            return r.ping() and cls(r)
         except redis.ConnectionError:
-            raise RediSugarException('Cannot connect to redis server')
+            raise RuntimeError('Cannot connect to redis server')
 
-    def __init__(self, _redis):
-        self.redis = _redis
+    def __init__(self, redis_instance):
+        self.redis = redis_instance
 
 
 class rlist(object):
@@ -279,11 +280,215 @@ class rlist(object):
         self.redis.delete(self.key)
 
 
-class rset(object):
-    pass
-
-
 class rdict(object):
+    """
+    redis dict class
+
+    Note:
+        - builtin dict methods (viewitems(), viewkeys(), viewvalues()) that return view object are not implemented
+        - rdict.copy() method is an alias of rdict.items() method but slightly different from dict.copy()
+        - several methods (value_len(), ) are implemented to take advatange of redis-py interfaces
+
+    Warning:
+        - key and value only support str type at present, all other type will be converted to str
+        - None will be converted to 'None' in redis
+    """
+    def __init__(self, redisugar, key, *args, **kwargs):
+        self.redis = redisugar.redis
+        self.key = key
+        len_args = len(args)
+        if len_args == 1:
+            iterable_or_mapping = args[0]
+        elif len_args > 1:
+            raise TypeError('rdict expected at most 1 argument for initialization, got {0}'.format(len_args))
+        else:
+            iterable_or_mapping = None
+        self._update(iterable_or_mapping, **kwargs)
+
+    def _update(self, iterable_or_mapping, **kwargs):
+        if iterable_or_mapping:
+            if isinstance(iterable_or_mapping, Iterable):
+                for i, each in enumerate(iterable_or_mapping):
+                    try:
+                        if len(each) != 2:
+                            raise ValueError('dictionary update sequence element #{0} has length {1}; 2 is '
+                                             'required'.format(i, len(each)))
+                        else:
+                            self._write(each[0], each[1])
+                    except TypeError:
+                        raise TypeError('cannot convert dictionary update sequence element #{0} to a '
+                                        'sequence'.format(i))
+            elif isinstance(iterable_or_mapping, Mapping):
+                for k, v in iterable_or_mapping:
+                    self._write(k, v)
+            else:
+                raise TypeError('\'{0}\' object is not iterable'.format(str(type(iterable_or_mapping))[7: -2]))
+        if kwargs:
+            for k in kwargs:
+                self._write(k, kwargs[k])
+
+    def _raise_not_hashable(self, item):
+        hash(item)
+
+    def _check_key_exists(self, key):
+        if not self.redis.hexists(self.key, key):
+            raise KeyError(str(key))
+
+    def _read(self, key):
+        return self.redis.hget(self.key, key)
+
+    def _write(self, key, value):
+        self.redis.hset(self.key, key, value)
+
+    def _del(self, key):
+        self.redis.hdel(self.key, key)
+
+    def __contains__(self, item):
+        self._raise_not_hashable(item)
+        return self.redis.hexists(self.key, item)
+
+    def __len__(self):
+        return self.redis.hlen(self.key)
+
+    def __getitem__(self, item):
+        self._raise_not_hashable(item)
+        self._check_key_exists(item)
+        return self._read(item)
+
+    def __setitem__(self, key, value):
+        self._raise_not_hashable(key)
+        self._write(key, value)
+
+    def __delitem__(self, key):
+        self._raise_not_hashable(key)
+        self._check_key_exists(key)
+        self._del(key)
+
+    def __iter__(self):
+        # optimize later
+        return iter(self.keys())
+
+    def __repr__(self):
+        return '<redisugar.rdict object with key: ' + self.key + '>'
+
+    def __str__(self):
+        return str(self.copy())
+
+    def __format__(self, format_spec):
+        if isinstance(format_spec, unicode):
+            return unicode(str(self))
+        else:
+            return str(self)
+
+    def clear(self):
+        self.redis.delete(self.key)
+
+    def copy(self):
+        """
+        alias of rdict.items()
+        """
+        return self.items()
+
+    @classmethod
+    def fromkeys(cls, redisugar, key, seq, value=None):
+        rd = cls(redisugar, key)
+        for each in seq:
+            rd[each] = value
+        return rd
+
+    def get(self, key, default=None):
+        return self._read(key) if self.__contains__(key) else default
+
+    def keys(self):
+        return self.redis.hkeys(self.key)
+
+    def values(self):
+        return self.redis.hvals(self.key)
+
+    def items(self):
+        return self.redis.hgetall(self.key)
+
+    def iterkeys(self):
+        for each in self.redis.hscan_iter(self.key):
+            yield each[0]
+
+    def itervalues(self):
+        for each in self.redis.hscan_iter(self.key):
+            yield each[1]
+
+    def iteritems(self):
+        for each in self.redis.hscan_iter(self.key):
+            yield each
+
+    def pop(self, key, *defaults):
+        if len(defaults) > 1:
+            raise TypeError('pop expected at most 2 arguments, got {0}'.format(1 + len(defaults)))
+        try:
+            value = self.__getitem__(key)
+            self.__delitem__(key)
+        except KeyError:
+            if defaults:
+                return defaults[0]
+            else:
+                raise
+        return value
+
+    def popitem(self):
+        for key in self.iterkeys():
+            break
+        else:
+            raise KeyError('popitem(): dictionary is empty')
+        value = self._read(key)
+        self._del(key)
+        return key, value
+
+    def setdefault(self, key, value=None):
+        if self.__contains__(key):
+            return self._read(key)
+        else:
+            self._write(key, value)
+            return str(value)
+
+    def update(self, *args, **kwargs):
+        len_args = len(args)
+        if len_args == 1:
+            iterable_or_mapping = args[0]
+        elif len_args > 1:
+            raise TypeError('update expected at most 1 (non-keyword) argument, got {0}'.format(len_args))
+        else:
+            iterable_or_mapping = None
+        self._update(iterable_or_mapping, **kwargs)
+
+    def multi_set(self, *args):
+        raise NotImplemented
+
+    def multi_get(self, *args):
+        raise NotImplemented
+
+    def incr_by(self, key, amount):
+        """
+        Increase the value by integer amount with given key
+        :param key: rdict key
+        :param amount: (int) increase amount
+        :return: value after increased
+        """
+        self._raise_not_hashable(key)
+        self._check_key_exists(key)
+        return self.redis.hincrby(self.key, key, amount)
+
+    def incr_by_float(self, key, amount):
+        """
+        Increase the value by float amount with given key
+        :param key: rdict key
+        :param amount: (float) increase amount
+        :return: value after increased
+        """
+        self._raise_not_hashable(key)
+        self._check_key_exists(key)
+        return self.redis.hincrbyfloat(self.key, key, amount)
+
+
+class rset(object):
     pass
 
 
