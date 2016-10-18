@@ -2,6 +2,7 @@
 import redis
 from collections import Iterable
 from collections import Mapping
+from utils import *
 
 
 class RediSugar(object):
@@ -54,7 +55,7 @@ class rlist(object):
 
     def __mul__(self, other):
         if not isinstance(other, int):
-            raise TypeError('can\'t multiply sequence by non-int of type ' + str(type(other))[7: -2])
+            raise TypeError('can\'t multiply sequence by non-int of type ' + get_type(other))
         return self.copy() * other
 
     def __rmul__(self, other):
@@ -62,7 +63,7 @@ class rlist(object):
 
     def __imul__(self, other):
         if not isinstance(other, int):
-            raise TypeError('can\'t multiply sequence by non-int of type ' + str(type(other))[7: -2])
+            raise TypeError('can\'t multiply sequence by non-int of type ' + get_type(other))
         if other <= 0:
             self.clear()
         elif other == 1:
@@ -96,7 +97,7 @@ class rlist(object):
 
     def _check_index(self, item):
         if not isinstance(item, int):
-            raise TypeError('list indices must be integers, not ' + str(type(item))[7: -2])
+            raise TypeError('list indices must be integers, not ' + get_type(item))
         _len = self.__len__()
         if item >= _len or -item < -_len:
             raise IndexError('list index out of range')
@@ -212,7 +213,7 @@ class rlist(object):
 
     def extend(self, iterable):
         if not isinstance(iterable, Iterable):
-            raise TypeError('\'{0}\' object is not iterable'.format(type(iterable)))
+            raise TypeError('\'{0}\' object is not iterable'.format(get_type(iterable)))
         self.redis.rpush(self.key, *list(iterable))
 
     def index(self, item, start=0, stop=-1):
@@ -322,7 +323,7 @@ class rdict(object):
                 for k, v in iterable_or_mapping:
                     self._write(k, v)
             else:
-                raise TypeError('\'{0}\' object is not iterable'.format(str(type(iterable_or_mapping))[7: -2]))
+                raise TypeError('\'{0}\' object is not iterable'.format(get_type(iterable_or_mapping)))
         if kwargs:
             for k in kwargs:
                 self._write(k, kwargs[k])
@@ -365,8 +366,7 @@ class rdict(object):
         self._del(key)
 
     def __iter__(self):
-        # optimize later
-        return iter(self.keys())
+        return self.iterkeys()
 
     def __repr__(self):
         return '<redisugar.rdict object with key: ' + self.key + '>'
@@ -489,7 +489,382 @@ class rdict(object):
 
 
 class rset(object):
-    pass
+    """
+    redis set class
+    TODO: set comparison methods
+    """
+    def __init__(self, redisugar, key, iterable=None):
+        self.redis = redisugar
+        self.key = key
+        if iterable:
+            pass
+
+    def _raise_not_hashable(self, value):
+        """Check wether value is hashable
+        :raise TypeError: when value is not hashable
+        """
+        hash(value)
+
+    def _write(self, *values):
+        """Write multiple values into redis."""
+        self.redis.sadd(self.key, *values)
+
+    def _delete(self, *values):
+        """Delete multiple values from redis."""
+        self.redis.srem(self.key, *values)
+
+    def _make_sets(self, others):
+        """Check input parameters and set(parameter) if it is not set/fronzenset/rset
+        :param others: list of all other Iterable objects
+        :return: list of set/fronzenset/rset
+        :raise: TypeError: when parameter is not iterable
+        """
+        others = [other if isinstance(other, (set, frozenset, rset)) else set(other) for other in others]
+        return others
+
+    def _cmp_length(self, other):
+        """Compare self and other set by length
+        :param other: another set/fronzenset
+        :return small, large: small set and large set by length
+        """
+        if len(other) > self.__len__():
+            small, large = self, other
+        else:
+            small, large = other, self
+        return small, large
+
+    def __len__(self):
+        """Return length of the rset."""
+        return self.redis.scard(self.key)
+
+    def __contains__(self, value):
+        """Test value for membership in rset."""
+        return self.redis.sismember(self.key, value)
+
+    def __or__(self, other):
+        """Return a new set with elements from the rset and the other.
+        :param other: another set-like object
+        :return: rset | other
+        """
+        if isinstance(other, rset):
+            return self.redis.sunion(self.key, other.key)
+        elif isinstance(other, (set, frozenset)):
+            return self.union(other)
+        else:
+            raise TypeError('unsupported operand type(s) for |: \'rset\' and \'{}\''.format(get_type(other)))
+
+    def __ior__(self, other):
+        """Update the rset, adding elements from the other.
+        self |= other
+        :param other: another set-like object
+        :return: self
+        """
+        if isinstance(other, rset):
+            self.redis.sunionstore(self.key, self.key, other.key)
+        elif isinstance(other, (set, frozenset)):
+            self._write(*other)
+        else:
+            raise TypeError('unsupported operand type(s) for |=: \'rset\' and \'{}\''.format(get_type(other)))
+        return self
+
+    def __ror__(self, other):
+        """For builtin types that called with other | rset.
+        Call self.__or__ according to Commutative Law
+        :param other: another set-like object
+        :return: other | rset
+        """
+        try:
+            return self.__or__(other)
+        except TypeError:
+            raise TypeError('unsupported operand type(s) for |: \'{}\' and \'rset\''.format(get_type(other)))
+
+    def __and__(self, other):
+        """Return a new set with elements common to the rset and the other.
+        :param other: another set-like object
+        :return: rset & other
+        """
+        if isinstance(other, rset):
+            return self.redis.sinter(self.key, other.key)
+        elif isinstance(other, (set, frozenset)):
+            small, large = self._cmp_length(other)
+            inter = [value for value in small if value in large]
+            return inter
+        else:
+            raise TypeError('unsupported operand type(s) for &: \'rset\' and \'{}\''.format(get_type(other)))
+
+    def __iand__(self, other):
+        """Update the rset, keeping only elements found in it and the other.
+        self &= other
+        :param other: another set-like object
+        :return: self
+        """
+        if isinstance(other, rset):
+            self.redis.sinterstore(self.key, self.key, other.key)
+        elif isinstance(other, (set, frozenset)):
+            diff = self.__sub__(other)
+            self._delete(*diff)
+        else:
+            raise TypeError('unsupported operand type(s) for &=: \'rset\' and \'{}\''.format(get_type(other)))
+        return self
+
+    def __rand__(self, other):
+        """For builtin types that called with other & rset.
+        Call self.__and__ according to Commutative Law
+        :param other: another set-like object
+        :return: other & rset
+        """
+        try:
+            return self.__and__(other)
+        except TypeError:
+            raise TypeError('unsupported operand type(s) for &: \'{}\' and \'rset\''.format(get_type(other)))
+
+    def __sub__(self, other):
+        """Return a new set with elements in the rset that are not in the other.
+        :param other: another set-list object
+        :return: rset - other
+        """
+        if isinstance(other, rset):
+            return self.redis.sdiff(self.key, other.key)
+        elif isinstance(other, (set, frozenset)):
+            small, large = self._cmp_length(other)
+            diff = [value for value in small if value not in large]
+            return diff
+        else:
+            raise TypeError('unsupported operand type(s) for -: \'rset\' and \'{}\''.format(get_type(other)))
+
+    def __isub__(self, other):
+        """Update the rset, keeping only elements found in either set, but not in both.
+        self -= other
+        :param other: another set-like object
+        :return: self
+        """
+        if isinstance(other, rset):
+            self.redis.sdiffstore(self.key, self.key, other.key)
+        elif isinstance(other, (set, frozenset)):
+            inter = self.__and__(other)
+            self._delete(*inter)
+        else:
+            raise TypeError('unsupported operand type(s) for -=: \'rset\' and \'{}\''.format(get_type(other)))
+        return self
+
+    def __rsub__(self, other):
+        """For builtin types that called with other - rset
+        :param other: another set-like object
+        :return: other - rset
+        """
+        if isinstance(other, rset):
+            other.__sub__(self)
+        elif isinstance(other, (set, frozenset)):
+            inter = self.__and__(other)
+            return other - inter
+        else:
+            raise TypeError('unsupported operand type(s) for -: \'{}\' and \'rset\''.format(get_type(other)))
+
+    def __xor__(self, other):
+        """Return a new set with elements in either the rset or other but not both.
+        :param other: another set-like object
+        :return: self ^ other
+        """
+        try:
+            return self.__or__(other) - self.__and__(other)
+        except TypeError:
+            raise TypeError('unsupported operand type(s) for ^: \'rset\' and \'{}\''.format(get_type(other)))
+
+    def __ixor__(self, other):
+        """Update self to self ^ other
+        :param other: another set-like object
+        :return: self
+        """
+        try:
+            to_del = self.__and__(other)
+            to_add = other - self
+            self._delete(*to_del)
+            self._write(*to_add)
+            return self
+        except TypeError:
+            raise TypeError('unsupported operand type(s) for ^=: \'rset\' and \'{}\''.format(get_type(other)))
+
+    def __rxor__(self, other):
+        """For builtin types that called with other ^ rset
+        :param other: another set-like object
+        :return: rset ^ other
+        """
+        try:
+            return self.__xor__(other)
+        except TypeError:
+            raise TypeError('unsupported operand type(s) for ^: \'{}\' and \'rset\''.format(get_type(other)))
+
+    def __iter__(self):
+        """Return a generator object of rset"""
+        return self.redis.sscan_iter(self.key)
+
+    def copy(self):
+        """Copy the rset into memory.
+        :return: shallow copy of rset
+        :type: set
+        """
+        return self.redis.smembers(self.key)
+
+    def add(self, value):
+        """Add element elem to the rset."""
+        self._raise_not_hashable(value)
+        self._write(value)
+
+    def discard(self, value):
+        """Remove element elem from the rset if it is present.
+        :param value: element to remove
+        """
+        self._raise_not_hashable(value)
+        self._delete(value)
+
+    def remove(self, value):
+        """Remove element elem from the rset.
+        :param value: element to remove
+        :raise KeyError: when value not found
+        """
+        self._raise_not_hashable(value)
+        if not self.__contains__(value):
+            raise KeyError(str(value))
+        else:
+            self._delete(value)
+
+    def pop(self):
+        """Remove and return an arbitrary element from the rset.
+        :return value: random element
+        :raise KeyError: when rset is empty
+        """
+        if self.__len__() == 0:
+            raise KeyError('pop from an empty rset')
+        value = self.redis.spop(self.key)
+        return value
+
+    def clear(self):
+        """Remove all elements from the rset."""
+        self.redis.delete(self.key)
+
+    def union(self, *others):
+        """Return a new set with elements from the rset and all others.
+        :param others: list of all other Iterable object
+        :return union_set: union of rset and all others
+        """
+        union_set = self.copy()
+        union_set.union(*others)
+        return union_set
+
+    def update(self, *others):
+        """Update the rset, adding elements from all others.
+        self |= other | ...
+        :param others: list if all other Iterable object
+        """
+        others = self._make_sets(others)
+        for other in others:
+            self.__ior__(other)
+
+    def intersection(self, *others):
+        """Return a new set with elements common to the rset and all others.
+        :param others: list of all other Iterable object
+        :return intersection_set: intersection of rset and all others
+        """
+        others = self._make_sets(others)
+        others.append(self)
+        min_set = min(others, key=lambda x: len(x))
+        intersection_set = set()
+        for item in min_set:
+            if all(item in other for other in others):
+                intersection_set.add(item)
+        return intersection_set
+
+    def intersection_update(self, *others):
+        """Update the rset, keeping only elements found in it and all others.
+        self &= other & ...
+        :param others: list if all other Iterable object
+        """
+        others = self._make_sets(others)
+        for other in others:
+            self.__iand__(other)
+
+    def difference(self, *others):
+        """Return a new set with elements in the rset that are not in the others.
+        :param others: list of all other Iterable object
+        :return difference_set: difference of rset from all others
+        """
+        others = self._make_sets(others)
+        difference_set = set()
+        for item in self.__iter__():
+            if all(item not in other for other in others):
+                difference_set.add(item)
+        return difference_set
+
+    def difference_update(self, *others):
+        """Update the rset, removing elements found in others.
+        self -= other | ...
+        :param others: list if all other Iterable object
+        """
+        others = self._make_sets(others)
+        for other in others:
+            self.__isub__(other)
+
+    def symmetric_difference(self, other):
+        """Return a new set with elements in either the rset or other but not both.
+        :param other: another Iterable object
+        :return: self ^ other
+        :raise: TypeError: when other is not iterable
+        """
+        if not isinstance(other, (set, frozenset, rset)):
+            other = set(other)
+        return self.__xor__(other)
+
+    def symmetric_difference_update(self, other):
+        """Update the rset, keeping only elements found in either set, but not in both.
+        self ^= other
+        :param other: another Iterable object
+        :raise: TypeError: when other is not iterable
+        """
+        if not isinstance(other, (set, frozenset, rset)):
+            other = set(other)
+        return self.__ixor__(other)
+
+    def isdisjoint(self, other):
+        """
+        Return True if the set has no elements in common with other.
+        Sets are disjoint if and only if their intersection is the empty set.
+        :param other: another Iterable object
+        :return: True/False
+        :raise: TypeError: when other is not iterable
+        """
+        if not isinstance(other, (set, frozenset, rset)):
+            other = set(other)
+        small, large = self._cmp_length(other)
+        for item in small:
+            if item in large:
+                return False
+        return True
+
+    def issubset(self, other):
+        """Test whether every element in the set is in other.
+        :param other: another Iterable object
+        :return: True/False
+        :raise: TypeError: when other is not iterable
+        """
+        if not isinstance(other, (set, frozenset, rset)):
+            other = set(other)
+        for item in self.__iter__():
+            if item not in other:
+                return False
+        return True
+
+    def issuperset(self, other):
+        """Test whether every element in other is in the set.
+        :param other: another Iterable object
+        :return: True/False
+        :raise: TypeError: when other is not iterable
+        """
+        if not isinstance(other, (set, frozenset, rset)):
+            other = set(other)
+        for item in other:
+            if not self.__contains__(item):
+                return False
+        return True
 
 
 class rstr(object):
