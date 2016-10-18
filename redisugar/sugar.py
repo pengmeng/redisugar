@@ -288,7 +288,7 @@ class rdict(object):
     Note:
         - builtin dict methods (viewitems(), viewkeys(), viewvalues()) that return view object are not implemented
         - rdict.copy() method is an alias of rdict.items() method but slightly different from dict.copy()
-        - several methods (value_len(), ) are implemented to take advatange of redis-py interfaces
+        - several methods (TODO) are implemented to take advatange of redis-py interfaces
 
     Warning:
         - key and value only support str type at present, all other type will be converted to str
@@ -491,13 +491,20 @@ class rdict(object):
 class rset(object):
     """
     redis set class
-    TODO: set comparison methods
+
+    Warning:
+        - only support str type at present, all other types will be converted to str by redis-py
+
+    TODO:
+        - set comparison methods
     """
     def __init__(self, redisugar, key, iterable=None):
-        self.redis = redisugar
+        self.redis = redisugar.redis
         self.key = key
         if iterable:
-            pass
+            for item in iterable:
+                self._raise_not_hashable(item)
+                self._write(item)
 
     def _raise_not_hashable(self, value):
         """Check wether value is hashable
@@ -507,13 +514,18 @@ class rset(object):
 
     def _write(self, *values):
         """Write multiple values into redis."""
+        if not values:
+            return
         self.redis.sadd(self.key, *values)
 
     def _delete(self, *values):
         """Delete multiple values from redis."""
+        if not values:
+            return
         self.redis.srem(self.key, *values)
 
-    def _make_sets(self, others):
+    @classmethod
+    def _make_sets(cls, others):
         """Check input parameters and set(parameter) if it is not set/fronzenset/rset
         :param others: list of all other Iterable objects
         :return: list of set/fronzenset/rset
@@ -587,7 +599,7 @@ class rset(object):
             return self.redis.sinter(self.key, other.key)
         elif isinstance(other, (set, frozenset)):
             small, large = self._cmp_length(other)
-            inter = [value for value in small if value in large]
+            inter = set(value for value in small if value in large)
             return inter
         else:
             raise TypeError('unsupported operand type(s) for &: \'rset\' and \'{}\''.format(get_type(other)))
@@ -626,8 +638,7 @@ class rset(object):
         if isinstance(other, rset):
             return self.redis.sdiff(self.key, other.key)
         elif isinstance(other, (set, frozenset)):
-            small, large = self._cmp_length(other)
-            diff = [value for value in small if value not in large]
+            diff = set(value for value in self if value not in other)
             return diff
         else:
             raise TypeError('unsupported operand type(s) for -: \'rset\' and \'{}\''.format(get_type(other)))
@@ -748,7 +759,7 @@ class rset(object):
         :return union_set: union of rset and all others
         """
         union_set = self.copy()
-        union_set.union(*others)
+        union_set = union_set.union(*others)
         return union_set
 
     def update(self, *others):
