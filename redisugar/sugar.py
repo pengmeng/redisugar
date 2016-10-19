@@ -6,6 +6,12 @@ from utils import *
 
 
 class RediSugar(object):
+    """
+    A wrapper for redis.Redis() object, supports database level operations (dict-like operations).
+
+    TODO:
+        Overwrite set and get methods to support list/hash/set class (rlist/rdict/rset) in redisugar.
+    """
     _Pool = {}
 
     @classmethod
@@ -21,8 +27,152 @@ class RediSugar(object):
     def __init__(self, redis_instance):
         self.redis = redis_instance
 
+    def __len__(self):
+        """Returns the number of keys in the current database
+        :return: redis.dbsize()
+        """
+        return self.redis.dbsize()
+
+    def __contains__(self, name):
+        """Returns a boolean indicating whether key name exists
+        :param name: redis db key
+        :return: True/False
+        """
+        return self.redis.exists(name)
+
+    def __setitem__(self, key, value, expire_seconds=None, expire_milliseconds=None, not_exists=False, if_exists=False):
+        """Set the value at key name to value
+        :param key: redis key
+        :param value: value to the key
+        """
+        self.redis.set(key, value, expire_seconds, expire_milliseconds, not_exists, if_exists)
+
+    def __getitem__(self, key):
+        """Return the value at key
+        :param key: redis key
+        :return: value at the key
+        :raise KeyError: when key does not exists
+        """
+        if not self.__contains__(key):
+            raise KeyError(str(key))
+        return self.redis.get(key)
+
+    def __delitem__(self, key):
+        """Delete one key from database
+        :param key: redis key
+        :raise KeyError: when key does not exists
+        """
+        if not self.__contains__(key):
+            raise KeyError(str(key))
+        self.redis.delete(key)
+
+    def __iter__(self):
+        """Return a generator of current database keys
+        :return: generator object
+        """
+        return self.redis.scan_iter()
+
+    def keys(self):
+        """Returns all keys as a list in current database
+        :return: list of keys
+        """
+        return self.redis.keys()
+
+    def get(self, key, default=None):
+        """Return the value at the key if exists else default
+        :param key: redis key
+        :param default: default value if key not exists
+        :return: value at the key or default
+        """
+        return self.__getitem__(key) if self.__contains__(key) else default
+
+    def pop(self, key, *defaults):
+        """If key is in the database, remove it and return its value, else return default.
+        :param key: redis key
+        :param defaults: default value
+        :raise KeyError: when key not exists and default value not given
+        """
+        if len(defaults) > 1:
+            raise TypeError('pop expected at most 2 arguments, got {0}'.format(1 + len(defaults)))
+        try:
+            value = self.__getitem__(key)
+            self.__delitem__(key)
+        except KeyError:
+            if defaults:
+                return defaults[0]
+            else:
+                raise
+        return value
+
+    def setdefault(self, key, default):
+        """If key is in the datatbase, return its value.
+        If not, insert key with a value of default and return default.
+        :param key: redis key
+        :param default: default value
+        """
+        if self.__contains__(key):
+            return self.redis.get(key)
+        else:
+            self.redis.set(key, default)
+            return str(default)
+
+    def getset(self, key, value):
+        """Sets the value at key to value and returns the old value at key atomically.
+        :param key: redis key
+        :param value: value at key
+        :return: old value at key
+        """
+        return self.redis.getset(key, value)
+
+    def rename(self, src, dst, not_exists=False):
+        """Rename key src to dst
+        :param src: source key
+        :param dst: destination key
+        :param not_exists: if True, rename only if destination key not exists
+        :return: True/False, rename status
+        """
+        if not_exists:
+            return self.redis.renamenx(src, dst)
+        else:
+            return self.redis.rename(src, dst)
+
+    def dump(self, key):
+        """Return a serialized version of the value stored at the specified key.
+        If key does not exist a nil bulk reply is returned.
+        :param key: redis key
+        :return: bulk string
+        """
+        return self.redis.dump(key)
+
+    def restore(self, key, ttl, value, replace=False):
+        """Create a key using the provided serialized value,
+        previously obtained using RediSugar.dump().
+        :param key: redis key
+        :param ttl: time to live
+        :param value: bulk returned from dump()
+        :param replace: replace if key exists
+        :return: restore status
+        """
+        return self.redis.restore(key, ttl, value, replace=replace)
+
+    def clear(self):
+        """Delete ALL keys in the current database"""
+        self.redis.flushdb()
+
+    def save(self, block=False):
+        """Tell the Redis server to save its data to disk
+        :param block: blocking until the save is complete or not, default False
+        """
+        if block:
+            self.redis.save()
+        else:
+            self.redis.bgsave()
+
 
 class rlist(object):
+    """
+    redis list class
+    """
 
     def __init__(self, redisugar, key, iterable=None, dtype=str):
         self.redis = redisugar.redis
@@ -294,6 +444,7 @@ class rdict(object):
         - key and value only support str type at present, all other type will be converted to str
         - None will be converted to 'None' in redis
     """
+
     def __init__(self, redisugar, key, *args, **kwargs):
         self.redis = redisugar.redis
         self.key = key
@@ -498,6 +649,7 @@ class rset(object):
     TODO:
         - set comparison methods
     """
+
     def __init__(self, redisugar, key, iterable=None):
         self.redis = redisugar.redis
         self.key = key
@@ -552,6 +704,9 @@ class rset(object):
     def __contains__(self, value):
         """Test value for membership in rset."""
         return self.redis.sismember(self.key, value)
+
+    def __repr__(self):
+        return '<redisugar.rset object with key: ' + self.key + '>'
 
     def __or__(self, other):
         """Return a new set with elements from the rset and the other.
@@ -876,7 +1031,3 @@ class rset(object):
             if not self.__contains__(item):
                 return False
         return True
-
-
-class rstr(object):
-    pass
