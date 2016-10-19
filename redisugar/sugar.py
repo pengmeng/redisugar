@@ -45,7 +45,14 @@ class RediSugar(object):
         :param key: redis key
         :param value: value to the key
         """
-        self.redis.set(key, value, expire_seconds, expire_milliseconds, not_exists, if_exists)
+        if isinstance(value, list):
+            rlist(self, key, value)
+        elif isinstance(value, dict):
+            rdict(self, key, value)
+        elif isinstance(value, (set, frozenset)):
+            rset(self, key, value)
+        else:
+            self.redis.set(key, value, expire_seconds, expire_milliseconds, not_exists, if_exists)
 
     def __getitem__(self, key):
         """Return the value at key
@@ -55,7 +62,16 @@ class RediSugar(object):
         """
         if not self.__contains__(key):
             raise KeyError(str(key))
-        return self.redis.get(key)
+        _type = self.redis.type(key)
+        if _type == 'list':
+            value = rlist(self, key)
+        elif _type == 'hash':
+            value = rdict(self, key)
+        elif _type == 'set':
+            value = rset(self, key)
+        else:
+            value = self.redis.get(key)
+        return value
 
     def __delitem__(self, key):
         """Delete one key from database
@@ -110,14 +126,16 @@ class RediSugar(object):
         :param key: redis key
         :param default: default value
         """
-        if self.__contains__(key):
-            return self.redis.get(key)
-        else:
-            self.redis.set(key, default)
-            return str(default)
+        try:
+            value = self.redis.__getitem__(key)
+        except KeyError:
+            self.redis.__setitem__(key, default)
+            value = str(default)
+        return value
 
     def getset(self, key, value):
         """Sets the value at key to value and returns the old value at key atomically.
+        Warning: currently not support redisugar object rlist/rdict/rset
         :param key: redis key
         :param value: value at key
         :return: old value at key
@@ -459,7 +477,10 @@ class rdict(object):
 
     def _update(self, iterable_or_mapping, **kwargs):
         if iterable_or_mapping:
-            if isinstance(iterable_or_mapping, Iterable):
+            if isinstance(iterable_or_mapping, Mapping):
+                for k in iterable_or_mapping:
+                    self._write(k, iterable_or_mapping[k])
+            elif isinstance(iterable_or_mapping, Iterable):
                 for i, each in enumerate(iterable_or_mapping):
                     try:
                         if len(each) != 2:
@@ -470,9 +491,6 @@ class rdict(object):
                     except TypeError:
                         raise TypeError('cannot convert dictionary update sequence element #{0} to a '
                                         'sequence'.format(i))
-            elif isinstance(iterable_or_mapping, Mapping):
-                for k, v in iterable_or_mapping:
-                    self._write(k, v)
             else:
                 raise TypeError('\'{0}\' object is not iterable'.format(get_type(iterable_or_mapping)))
         if kwargs:
@@ -707,6 +725,9 @@ class rset(object):
 
     def __repr__(self):
         return '<redisugar.rset object with key: ' + self.key + '>'
+
+    def __str__(self):
+        return str(self.copy())
 
     def __or__(self, other):
         """Return a new set with elements from the rset and the other.

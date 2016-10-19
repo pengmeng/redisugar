@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from unittest import TestCase
-from redisugar import RediSugar
+from redisugar import RediSugar, rlist, rdict, rset
 
 
 class TestRediSugar(TestCase):
@@ -10,6 +10,20 @@ class TestRediSugar(TestCase):
     def setUpClass(cls):
         cls.redisugar = RediSugar.getSugar(db=1)
         cls.redisugar.clear()
+
+    def test__set_get_item(self):
+        self.redisugar['test_list'] = [1, 2, 3]
+        self.assertIsInstance(self.redisugar['test_list'], rlist)
+        self.assertEqual(3, len(self.redisugar['test_list']))
+        self.redisugar['test_dict'] = dict.fromkeys([1, 2, 3], 0)
+        self.assertIsInstance(self.redisugar['test_dict'], rdict)
+        self.assertEqual(3, len(self.redisugar['test_dict']))
+        self.assertDictEqual({'1': '0', '3': '0', '2': '0'}, self.redisugar['test_dict'].copy())
+        self.redisugar['test_set'] = {1, 2, 3}
+        self.assertIsInstance(self.redisugar['test_set'], rset)
+        self.assertEqual(3, len(self.redisugar['test_set']))
+        self.assertSetEqual({'1', '2', '3'}, self.redisugar['test_set'])
+        self.redisugar.clear()
 
     def test_get(self):
         self.redisugar['1'] = '1'

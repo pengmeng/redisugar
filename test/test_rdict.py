@@ -19,6 +19,10 @@ class TestRdict(TestCase):
         self.assertRaises(TypeError, rdict, self.redisugar, 'dict_dummy', 3)
         d = rdict(self.redisugar, 'dict_len', [('a', 1), ('b', 2)], c=3, d=4)
         self.assertEqual(4, len(d))
+        d.clear()
+        d = rdict(self.redisugar, 'dict_init', {'a': '1', 'b': '2'})
+        self.assertDictEqual({'a': '1', 'b': '2'}, d.copy())
+        d.clear()
 
     def test_clear(self):
         d = rdict(self.redisugar, 'dict_clear')

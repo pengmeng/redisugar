@@ -131,7 +131,6 @@ Warning & Notes
 
 TODO
 ----
- - overwrite set and get methods to support list/hash/set class (rlist/rdict/rset) in redisugar.
  - add comparison methods for all data structures
  - use pipeline to optimize some operations
 
