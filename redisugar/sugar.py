@@ -8,9 +8,6 @@ from utils import *
 class RediSugar(object):
     """
     A wrapper for redis.Redis() object, supports database level operations (dict-like operations).
-
-    TODO:
-        Overwrite set and get methods to support list/hash/set class (rlist/rdict/rset) in redisugar.
     """
     _Pool = {}
 
@@ -193,6 +190,12 @@ class rlist(object):
     """
 
     def __init__(self, redisugar, key, iterable=None, dtype=str):
+        """Initiate a new redis list object
+        :param redisugar: redis.Redis() object
+        :param key: redis list key
+        :param iterable: an Iterable object to be filled in redis list
+        :param dtype: Callable data type specification, dtype(data)
+        """
         self.redis = redisugar.redis
         self.key = key
         self.dtype = dtype
@@ -200,36 +203,69 @@ class rlist(object):
             self.extend(iterable)
 
     def __len__(self):
+        """Return length of rlist
+        :return: length
+        """
         return self.redis.llen(self.key)
 
     def __add__(self, other):
+        """Concatenate rlist and another list or rlist
+        :param other: a list or rlist object
+        :return: self + other
+        """
         if not isinstance(other, (list, rlist)):
-            raise TypeError('can only concatenate list or rlist to rlist')
+            raise TypeError('can only concatenate list or rlist (not \"{}\") to rlist'.format(get_type(other)))
         if isinstance(other, rlist):
             other = other.copy()
         return self.copy() + other
 
     def __iadd__(self, other):
+        """Update rlist with another list or rlist
+        self += other
+        :param other: a list or rlist object
+        :return: self
+        """
         if not isinstance(other, (list, rlist)):
-            raise TypeError('can only concatenate list or rlist to rlist')
+            raise TypeError('can only concatenate list or rlist (not \"{}\") to rlist'.format(get_type(other)))
         if isinstance(other, rlist):
-            i, _len = 0, len(other)
-            while i < _len:
-                self.append(other[i])
-                i += 1
+            for item in other:
+                self.append(item)
         else:
             self.redis.rpush(self.key, *other)
         return self
 
+    def __radd__(self, other):
+        """Concatenate another list or rlist and self
+        :param other: a list or rlist object
+        :return: other + self
+        """
+        if not isinstance(other, (list, rlist)):
+            raise TypeError('can only concatenate rlist to list or rlist (not \"{}\")'.format(get_type(other)))
+        if isinstance(other, rlist):
+            other = other.copy()
+        return other + self.copy()
+
     def __mul__(self, other):
+        """Multiply rlist with an integer
+        :param other: int
+        :return: self * other
+        """
         if not isinstance(other, int):
             raise TypeError('can\'t multiply sequence by non-int of type ' + get_type(other))
         return self.copy() * other
 
     def __rmul__(self, other):
+        """For calling with int * rlist
+        :param other: int
+        :return: self * other
+        """
         return self.__mul__(other)
 
     def __imul__(self, other):
+        """Update rlist with rlist * int
+        :param other: int
+        :return: self *= other
+        """
         if not isinstance(other, int):
             raise TypeError('can\'t multiply sequence by non-int of type ' + get_type(other))
         if other <= 0:
@@ -246,16 +282,19 @@ class rlist(object):
         return self
 
     def __iter__(self):
-        i = 0
-        while i < self.__len__():
+        """Iterator of rlist
+        :return: generator object
+        """
+        i, _len = 0, self.__len__()
+        while i < _len:
             yield self[i]
             i += 1
 
-    def __format__(self, format_spec):
-        if isinstance(format_spec, unicode):
-            return unicode(str(self))
-        else:
-            return str(self)
+    # def __format__(self, format_spec):
+    #     if isinstance(format_spec, unicode):
+    #         return unicode(str(self))
+    #     else:
+    #         return str(self)
 
     def __repr__(self):
         return '<redisugar.rlist object with key: ' + self.key + '>'
@@ -264,6 +303,10 @@ class rlist(object):
         return str(self.copy())
 
     def _check_index(self, item):
+        """Check whether an index is valid
+        :param item: index
+        :type: int
+        """
         if not isinstance(item, int):
             raise TypeError('list indices must be integers, not ' + get_type(item))
         _len = self.__len__()
@@ -271,23 +314,43 @@ class rlist(object):
             raise IndexError('list index out of range')
 
     def _read(self, index):
+        """Helper function for reading an item from rlist
+        :param index: index, int
+        :return: item
+        """
         return self.redis.lindex(self.key, index)
 
     def _write(self, index, value):
+        """Helper function for writing an item to given index
+        :param index: index, int
+        :param value: value
+        """
         self.redis.lset(self.key, index, value)
 
     def __getitem__(self, key):
+        """For calling with self[key]
+        :param key: index
+        :type: int, slice
+        :return: item or sublist
+        """
         if isinstance(key, slice):
             start, stop, step = key.indices(self.__len__())
             result = []
             for i in range(start, stop, step):
-                result.append(self[i])
+                self._check_index(i)
+                result.append(self.dtype(self._read(i)))
             return result
         else:
             self._check_index(key)
             return self.dtype(self._read(key))
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value, pipeline=None):
+        """For assignment calling self[key] = value
+        :param key: index
+        :type: int, slice
+        :param value: item or list
+        :param pipeline: an existing redis.pipeline object to perform setting commands on
+        """
         if isinstance(key, slice):
             if not isinstance(value, Iterable):
                 raise TypeError('can only assign an iterable')
@@ -295,28 +358,41 @@ class rlist(object):
             start, stop, step = key.indices(self.__len__())
             if step == 1:
                 k_i, k_len = 0, len(value)
-                for i in range(start, stop, step):
-                    if k_i < k_len:
-                        self._write(i, value[k_i])
-                        k_i += 1
+                pipe = pipeline if pipeline else self.redis.pipeline()
+                with pipe:
+                    for i in range(start, stop, step):
+                        if k_i < k_len:
+                            # self._write(i, value[k_i])
+                            pipe.lset(self.key, i, value[k_i])
+                            k_i += 1
+                        else:
+                            break
                     else:
-                        break
-                else:
-                    if k_len - k_i == 0:
-                        return
-                    jump = k_len - k_i
-                    self.extend([self._read(-1)] * jump)
-                    i = self.__len__() - 1
-                    while i - jump >= stop:
-                        self._write(i, self._read(i - jump))
-                        i -= 1
-                    k_len -= 1
-                    while i >= stop:
-                        self._write(i, value[k_len])
-                        i -= 1
+                        if k_len - k_i == 0:
+                            pipe.execute()
+                            return
+                        jump = k_len - k_i
+                        # self.extend([self._read(-1)] * jump)
+                        pipe.rpush(self.key, *([None] * jump))
+                        i = self.__len__() - 1
+                        # while i - jump >= stop:
+                        while i >= stop:
+                            # self._write(i, self._read(i - jump))
+                            pipe.lset(self.key, i + jump, self._read(i))
+                            i -= 1
                         k_len -= 1
-                if start + k_i < stop:
-                    del self[start + k_i: stop]
+                        # while i >= stop:
+                        while i + jump >= stop:
+                            # self._write(i, value[k_len])
+                            pipe.lset(self.key, i + jump, value[k_len])
+                            i -= 1
+                            k_len -= 1
+                    # pipe.execute()
+                    if start + k_i < stop:
+                        # del self[start + k_i: stop]
+                        self.__delitem__(slice(start + k_i, stop), pipe)
+                    else:
+                        pipe.execute()
             else:
                 index = range(start, stop, step)
                 if len(index) != len(value):
@@ -329,23 +405,34 @@ class rlist(object):
             self._check_index(key)
             self._write(key, value)
 
-    def __delitem__(self, key):
+    def __delitem__(self, key, pipeline=None):
+        """For calling with del self[key]
+        :param key: index
+        :type: int, slice
+        :param pipeline: an existing redis.pipeline object to perform setting commands on
+        """
+        pipe = pipeline if pipeline else self.redis.pipeline()
         if isinstance(key, slice):
-            start, stop, step = key.indices(self.__len__())
-            to_del = set(range(start, stop, step))
-            i, counter = start, 0
-            while i < self.__len__():
-                if counter == len(to_del):
-                    break
-                if i in to_del:
-                    counter += 1
-                else:
-                    self._write(i - counter, self._read(i))
-                i += 1
-            while i < self.__len__():
-                self._write(i - counter, self._read(i))
-                i += 1
-            self.redis.ltrim(self.key, 0, -counter - 1)
+            with pipe:
+                start, stop, step = key.indices(self.__len__())
+                to_del = set(range(start, stop, step))
+                i, counter = start, 0
+                while i < self.__len__():
+                    if counter == len(to_del):
+                        break
+                    if i in to_del:
+                        counter += 1
+                    else:
+                        # self._write(i - counter, self._read(i))
+                        pipe.lset(self.key, i - counter, self._read(i))
+                    i += 1
+                while i < self.__len__():
+                    # self._write(i - counter, self._read(i))
+                    pipe.lset(self.key, i - counter, self._read(i))
+                    i += 1
+                # self.redis.ltrim(self.key, 0, -counter - 1)
+                pipe.ltrim(self.key, 0, -counter - 1)
+                pipe.execute()
         else:
             self._check_index(key)
             if key < 0:
@@ -355,47 +442,76 @@ class rlist(object):
             elif key == self.__len__() - 1:
                 self.redis.rpop(self.key)
             else:
-                while key < self.__len__() - 1:
-                    self._write(key, self._read(key + 1))
-                    key += 1
-                self.redis.rpop(self.key)
+                with pipe:
+                    while key < self.__len__() - 1:
+                        # self._write(key, self._read(key + 1))
+                        pipe.lset(self.key, key, self._read(key + 1))
+                        key += 1
+                    # self.redis.rpop(self.key)
+                    pipe.rpop(self.key)
+                    pipe.execute()
 
     def __contains__(self, item):
+        """For calling with item in rlist
+        :param item: item to check
+        :return: True/False
+        """
         i = 0
         while i < self.__len__():
-            if self[i] == item:
+            if self.dtype(self._read(i)) == item:
                 return True
             i += 1
         return False
 
     def append(self, item):
+        """Add one item to the end of the rlist
+        :param item: item to be added
+        """
         self.redis.rpush(self.key, item)
 
     def count(self, item):
+        """Return number of appearance of given item in rlist
+        :param item: item to count
+        :return acc: number of appearance of item
+        """
         acc, i = 0, 0
         while i < self.__len__():
-            if self[i] == item:
+            if self.dtype(self._read(i)) == item:
                 acc += 1
             i += 1
         return acc
 
     def extend(self, iterable):
+        """Extend the rlist with an Iterable object
+        :param iterable: an Iterable object
+        """
         if not isinstance(iterable, Iterable):
             raise TypeError('\'{0}\' object is not iterable'.format(get_type(iterable)))
         self.redis.rpush(self.key, *list(iterable))
 
     def index(self, item, start=0, stop=-1):
+        """Return index of item in rlist or raise ValueError if not found
+        :param item: item to find
+        :param start: start index
+        :param stop: end index
+        :return: item index
+        :raise ValueError: when item not in the rlist
+        """
         start, stop, _ = slice(start, stop, 1).indices(self.__len__())
         if stop < start:
             raise ValueError('{0} is not in list'.format(item))
         i = start
         while i <= stop:
-            if self[i] == item:
+            if self.dtype(self._read(i)) == item:
                 return i
             i += 1
         raise ValueError('{0} is not in list'.format(item))
 
     def insert(self, index, item):
+        """Insert an item into the rlist
+        :param index: insert index
+        :param item: item to insert
+        """
         if index < 0:
             index += self.__len__()
         if index == 0:
@@ -403,23 +519,37 @@ class rlist(object):
         elif index >= self.__len__():
             self.redis.rpush(self.key, item)
         else:
-            self.redis.rpush(self.key, self._read(-1))
-            i = self.__len__() - 2
-            while i > index:
-                self._write(i, self._read(i - 1))
-                i -= 1
-            self._write(index, item)
+            with self.redis.pipeline() as pipe:
+                # self.redis.rpush(self.key, self._read(-1))
+                pipe.rpush(self.key, self._read(-1))
+                # i = self.__len__() - 2
+                i = self.__len__() - 1
+                while i > index:
+                    # self._write(i, self._read(i - 1))
+                    pipe.lset(self.key, i, self._read(i - 1))
+                    i -= 1
+                # self._write(index, item)
+                pipe.lset(self.key, index, item)
+                pipe.execute()
 
     def pop(self, pos=-1):
+        """Pop one item from the rlist
+        :param pos: position to pop
+        :return item: item at position
+        """
         if self.__len__() == 0:
             raise IndexError('pop from empty list')
         self._check_index(pos)
-        temp = self.dtype(self._read(pos))
+        item = self.dtype(self._read(pos))
         self.__delitem__(pos)
-        return temp
+        return item
 
     def push(self, item, pos=-1):
-        if pos not in [0, -1]:
+        """Push one item to head or tail of the rlist
+        :param item: item to push
+        :param pos: -1 or 0, default -1
+        """
+        if pos not in (0, -1):
             raise ValueError('pos can only be 0 or -1 (head or tail)')
         if pos == 0:
             self.redis.lpush(self.key, item)
@@ -427,25 +557,39 @@ class rlist(object):
             self.redis.rpush(self.key, item)
 
     def remove(self, item, count=1):
+        """Remove item(s) from the rlist
+        :param item: item to remove
+        :param count: number of items to remove, from left
+        :raise ValueError: when item not found
+        """
         flag = self.redis.lrem(self.key, item, count)
         if flag == 0:
             raise ValueError('rlist.remove(x): {0} not in rlist'.format(item))
 
     def reverse(self):
-        tmp_key = self.key + '-tmp'
+        """Reverse the rlist in place, will create a temp redis object"""
+        tmp_key = self.key + str(id(self))
         while self.__len__() != 0:
             tmp = self.redis.rpop(self.key)
             self.redis.rpush(tmp_key, tmp)
         self.redis.rename(tmp_key, self.key)
 
     def sort(self, reverse=False, alpha=False):
+        """Sort the rlist in place
+        :param reverse: descending order
+        :param alpha:  sorting lexicographically
+        """
         self.redis.sort(self.key, alpha=alpha, desc=reverse, store=self.key)
 
     def copy(self):
+        """Return a copy of the rlist into memory
+        :return: copied list
+        """
         temp = self.redis.lrange(self.key, 0, -1)
         return map(self.dtype, temp)
 
     def clear(self):
+        """Remove all items in the rlist"""
         self.redis.delete(self.key)
 
 

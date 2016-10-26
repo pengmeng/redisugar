@@ -154,6 +154,8 @@ class TestRlist(TestCase):
         self.assertEqual([1, 2, 3, 4, 1, 2, 3, 4, 5], l.copy())
         l[0:7:2] = [9, 9, 9, 9]
         self.assertEqual([9, 2, 9, 4, 9, 2, 9, 4, 5], l.copy())
+        l[3:] = [9]
+        self.assertEqual([9, 2, 9, 9], l.copy())
         l[:] = []
         self.assertEqual([], l.copy())
         l.clear()
