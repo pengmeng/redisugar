@@ -62,6 +62,17 @@ class RediSugar(object):
         else:
             self.redis.set(key, value, expire_seconds, expire_milliseconds, not_exists, if_exists)
 
+    def set(self, key, value, expire_seconds=None, expire_milliseconds=None, not_exists=False, if_exists=False):
+        """Alias of redis.set with optional arguments
+        :param key: redis key
+        :param value: value to the key
+        :param expire_seconds: sets an expire flag on key name for ex seconds
+        :param expire_milliseconds: sets an expire flag on key name for px milliseconds
+        :param not_exists: if True, set the value at key to value if it does not already exist
+        :param if_exists:  if True, set the value at key name to value if it already exists
+        """
+        self.__setitem__(key, value, expire_seconds, expire_milliseconds, not_exists, if_exists)
+
     def __getitem__(self, key):
         """Return the value at key
         :param key: redis key
@@ -890,7 +901,7 @@ class rdict(object):
             iterable_or_mapping = None
         self._update(iterable_or_mapping, **kwargs)
 
-    def multi_set(self, keys, *args):
+    def multi_get(self, keys, *args):
         """Get multiple values in order of keys and args
         :param keys: a list of rdict keys
         :type: list
@@ -899,11 +910,15 @@ class rdict(object):
         """
         return self.redis.hmget(self.key, keys, *args)
 
-    def multi_get(self, mapping):
+    def multi_set(self, *args, **kwargs):
         """Set multiple k-v pairs
         :param mapping: k-v pairs
         """
-        self.redis.hmset(self.key, mapping)
+        if args:
+            if len(args) != 1 or not isinstance(args[0], dict):
+                raise TypeError('multi_set requires kwargs or a single dict arg')
+            kwargs.update(args[0])
+        self.redis.hmset(self.key, kwargs)
 
     def incr_by(self, key, amount):
         """
@@ -1334,3 +1349,151 @@ class rset(object):
             if not self.__contains__(item):
                 return False
         return True
+
+
+class rstr(object):
+    """
+    redis string class
+
+    Warning:
+        - Since python str object is immutable, it's make no sense to implement all python str interface for redis
+        string. This class only supports special redis string commands like INCR.
+        - You will need this object, only if you want update a redis string without copying it into memory. If you
+        want to use it like python str, just copy it to a str object, play, then update it back into redis.
+        - RediSugar[key] only return as python str object, you must explicitly create a rstr object.
+        - __iadd__ interface is implemented to take advantage of APPEND command in redis
+    """
+    def __init__(self, redisugar, key, value=''):
+        self.redis = redisugar.redis
+        self.key = key
+        self.redis.set(key, value)
+
+    @classmethod
+    def multi_set(cls, redisugar, *args, **kwargs):
+        """Alias of redis.mset, set multiple k-v pair, *assume all values are string*
+        :param redisugar: redisugar.RediSugar object
+        :param args: expect a single dict
+        :param kwargs: kwargs will be updated into dict
+        """
+        if args:
+            if len(args) != 1 or not isinstance(args[0], dict):
+                raise TypeError('multi_set requires kwargs or a single dict arg')
+            args[0].update(kwargs)
+            kwargs = args[0]
+        redisugar.redis.mset(kwargs)
+
+    @classmethod
+    def multi_set_not_exist(cls, redisugar, *args, **kwargs):
+        """Alias of redis.msetnx, set multiple k-v pair only if all keys are not present, *assume all values are string*
+        :param redisugar: redisugar.RediSugar object
+        :param args: expect a single dict
+        :param kwargs: kwargs will be updated into dict
+        :raise ValueError: when at least one key is already in redis
+        """
+        if args:
+            if len(args) != 1 or not isinstance(args[0], dict):
+                raise TypeError('multi_set_not_exists requires kwargs or a single dict arg')
+            args[0].update(kwargs)
+            kwargs = args[0]
+        status = redisugar.redis.msetnx(kwargs)
+        if not status:
+            raise ValueError('at least one key is already in redis')
+
+    @classmethod
+    def multi_get(cls, redisugar, keys, *args):
+        """Alias of redis.mget, *assume all values are string*
+        :param redisugar: redisugar.RediSugar object
+        :param keys: list of keys
+        :param args: keys will be appended to keys
+        :return: list of values
+        """
+        return redisugar.redis.mget(keys, *args)
+
+    def __repr__(self):
+        return '<redisugar.rstr object with key: ' + self.key + '>'
+
+    def __str__(self):
+        return self.redis.get(self.key)
+
+    def __len__(self):
+        return self.redis.strlen(self.key)
+
+    def __iadd__(self, other):
+        """Append other to self
+        :param other: str or rstr
+        :return: self
+        """
+        self.redis.append(self.key, other)
+        return self
+
+    def _check_index(self, item):
+        """Check whether an index is valid
+        :param item: index
+        :type: int
+        """
+        if not isinstance(item, int):
+            raise TypeError('string indices must be integers, not ' + get_type(item))
+        _len = self.__len__()
+        if item >= _len or -item < -_len:
+            raise IndexError('string index out of range')
+
+    def __getitem__(self, key):
+        """For calling with self[key]
+        :param key: index
+        :type: int, slice
+        :return: substring
+        """
+        if isinstance(key, slice):
+            start, stop, step = key.indices(self.__len__())
+            self._check_index(start)
+            self._check_index(stop)
+            if step == 1:
+                # getrange(key, start, stop) will return start, stop inclusively
+                result_str = self.redis.getrange(self.key, start, stop - 1)
+            else:
+                result = []
+                with self.redis.pipeline() as pipe:
+                    for i in range(start, stop, step):
+                        result.append(pipe.getrange(self.key, i, i))
+                result_str = ''.join(result)
+            return result_str
+        else:
+            self._check_index(key)
+            return self.redis.getrange(self.key, key, key)
+
+    def set(self, value):
+        """Set a new value to the key
+        :param value: new value
+        """
+        self.redis.set(self.key, value)
+
+    def decrease(self, decrement=1):
+        """Decrease the integer value at the key by decrement
+        :param decrement: decrease by number, default 1
+        """
+        if isinstance(decrement, int):
+            self.redis.decr(self.key, decrement)
+        else:
+            raise TypeError('can only decrease by int')
+
+    def increase(self, increment=1):
+        """Increase the integer value at the key by decrement
+        :param increment: increase by number, default 1
+        """
+        if isinstance(increment, int):
+            self.redis.incr(self.key, increment)
+        elif isinstance(increment, float):
+            self.redis.incrbyfloat(self.key, increment)
+        else:
+            raise TypeError('can only increase by int or float')
+
+    def set_range(self, offset, value):
+        """ Quote from redis-py document [http://redis-py.readthedocs.io/en/latest/]:
+        "Overwrite bytes in the value of name starting at offset with value. If offset plus the length of value
+        exceeds the length of the original value, the new value will be larger than before. If offset exceeds the
+        length of the original value, null bytes will be used to pad between the end of the previous value and the
+        start of what’s being injected."
+        null byte is \x00
+        :return: length of the new string
+        """
+        return self.redis.setrange(self.key, offset, value)

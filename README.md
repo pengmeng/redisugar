@@ -132,6 +132,8 @@ Warning & Notes
 TODO
 ----
  - add comparison methods for all data structures
+ - expire methods
+ - key methods in RediSugar class
 
 Acknowledgement
 ---------------
