@@ -13,7 +13,7 @@ class RediSugar(object):
     _STR_SUMMARY_LIMIT = 10
 
     @classmethod
-    def getSugar(cls, host='localhost', port=6379, db=0):
+    def get_sugar(cls, host='localhost', port=6379, db=0):
         if (host, port, db) not in RediSugar._Pool:
             cls._Pool[(host, port, db)] = redis.ConnectionPool(host=host, port=port, db=db)
         r = redis.Redis(connection_pool=cls._Pool[(host, port, db)])

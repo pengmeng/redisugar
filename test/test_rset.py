@@ -9,7 +9,7 @@ class TestRset(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.redisugar = RediSugar.getSugar(db=1)
+        cls.redisugar = RediSugar.get_sugar(db=1)
 
     @classmethod
     def tearDownClass(cls):

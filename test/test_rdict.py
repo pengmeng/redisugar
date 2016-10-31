@@ -10,7 +10,7 @@ class TestRdict(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.redisugar = RediSugar.getSugar(db=1)
+        cls.redisugar = RediSugar.get_sugar(db=1)
 
     def test__init(self):
         self.assertRaises(TypeError, rdict, self.redisugar, 'dict_dummy', [], [])

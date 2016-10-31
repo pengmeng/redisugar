@@ -8,7 +8,7 @@ class TestRediSugar(TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.redisugar = RediSugar.getSugar(db=1)
+        cls.redisugar = RediSugar.get_sugar(db=1)
         keys = [key for key in cls.redisugar.keys() if key.startswith('test_')]
         cls.redisugar.redis.delete(*keys)
 
