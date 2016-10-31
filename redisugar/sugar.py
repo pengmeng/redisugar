@@ -600,7 +600,7 @@ class rdict(object):
     Note:
         - builtin dict methods (viewitems(), viewkeys(), viewvalues()) that return view object are not implemented
         - rdict.copy() method is an alias of rdict.items() method but slightly different from dict.copy()
-        - several methods (TODO) are implemented to take advatange of redis-py interfaces
+        - several methods are implemented to take advatange of redis-py interfaces
 
     Warning:
         - key and value only support str type at present, all other type will be converted to str
@@ -608,6 +608,10 @@ class rdict(object):
     """
 
     def __init__(self, redisugar, key, *args, **kwargs):
+        """Initiate a new redis hash object
+        :param redisugar: redis.Redis() object
+        :param key: redis hash key
+        """
         self.redis = redisugar.redis
         self.key = key
         len_args = len(args)
@@ -620,65 +624,108 @@ class rdict(object):
         self._update(iterable_or_mapping, **kwargs)
 
     def _update(self, iterable_or_mapping, **kwargs):
-        if iterable_or_mapping:
-            if isinstance(iterable_or_mapping, Mapping):
-                for k in iterable_or_mapping:
-                    self._write(k, iterable_or_mapping[k])
-            elif isinstance(iterable_or_mapping, Iterable):
-                for i, each in enumerate(iterable_or_mapping):
-                    try:
-                        if len(each) != 2:
-                            raise ValueError('dictionary update sequence element #{0} has length {1}; 2 is '
-                                             'required'.format(i, len(each)))
-                        else:
-                            self._write(each[0], each[1])
-                    except TypeError:
-                        raise TypeError('cannot convert dictionary update sequence element #{0} to a '
-                                        'sequence'.format(i))
-            else:
-                raise TypeError('\'{0}\' object is not iterable'.format(get_type(iterable_or_mapping)))
-        if kwargs:
-            for k in kwargs:
-                self._write(k, kwargs[k])
+        """Helper funciton for update Iterable or Mapping or kwargs into rdict
+        :param iterable_or_mapping: Mapping or Iterable object
+        :raises ValueError, TypeError
+        """
+        with self.redis.pipeline() as pipe:
+            if iterable_or_mapping:
+                if isinstance(iterable_or_mapping, Mapping):
+                    for k in iterable_or_mapping:
+                        # self._write(k, iterable_or_mapping[k])
+                        pipe.hset(self.key, k, iterable_or_mapping[k])
+                elif isinstance(iterable_or_mapping, Iterable):
+                    for i, each in enumerate(iterable_or_mapping):
+                        try:
+                            if len(each) != 2:
+                                raise ValueError('dictionary update sequence element #{0} has length {1}; 2 is '
+                                                 'required'.format(i, len(each)))
+                            else:
+                                # self._write(each[0], each[1])
+                                pipe.hset(self.key, each[0], each[1])
+                        except TypeError:
+                            raise TypeError('cannot convert dictionary update sequence element #{0} to a '
+                                            'sequence'.format(i))
+                else:
+                    raise TypeError('\'{0}\' object is not iterable'.format(get_type(iterable_or_mapping)))
+            if kwargs:
+                for k in kwargs:
+                    # self._write(k, kwargs[k])
+                    pipe.hset(self.key, k, kwargs[k])
+            pipe.execute()
 
     def _raise_not_hashable(self, item):
+        """Try to hash an item"""
         hash(item)
 
     def _check_key_exists(self, key):
+        """Raise KeyError if key is not in rdict"""
         if not self.redis.hexists(self.key, key):
             raise KeyError(str(key))
 
     def _read(self, key):
+        """Helper function to read a value from rdict
+        :param key: rdict key
+        :return: value at the key
+        """
         return self.redis.hget(self.key, key)
 
     def _write(self, key, value):
+        """Helper function to write a k-v pair into rdict
+        :param key: rdict key
+        :param value: value
+        """
         self.redis.hset(self.key, key, value)
 
     def _del(self, key):
+        """Helper function to delete a key from rdict
+        :param key: rdict key
+        """
         self.redis.hdel(self.key, key)
 
     def __contains__(self, item):
+        """Check whether a key is in the rdict
+        :param item: rdict key
+        :return: True/False
+        """
         self._raise_not_hashable(item)
         return self.redis.hexists(self.key, item)
 
     def __len__(self):
+        """Return length of the rdict"""
         return self.redis.hlen(self.key)
 
     def __getitem__(self, item):
+        """For calling with self[key]
+        :param item: rdict key
+        :return: value at the key
+        :raise TypeError: when item is not hashable
+        :raise KeyError: when item is not in the rdict
+        """
         self._raise_not_hashable(item)
         self._check_key_exists(item)
         return self._read(item)
 
     def __setitem__(self, key, value):
+        """For calling with self[key] = value
+        :param key: rdict key
+        :param value: value
+        :raise TypeError: when item is not hashable
+        """
         self._raise_not_hashable(key)
         self._write(key, value)
 
     def __delitem__(self, key):
+        """For calling with del self[key]
+        :param key: rdict key
+        :raise TypeError: when item is not hashable
+        """
         self._raise_not_hashable(key)
         self._check_key_exists(key)
         self._del(key)
 
     def __iter__(self):
+        """Return iterator of rdict keys"""
         return self.iterkeys()
 
     def __repr__(self):
@@ -687,13 +734,14 @@ class rdict(object):
     def __str__(self):
         return str(self.copy())
 
-    def __format__(self, format_spec):
-        if isinstance(format_spec, unicode):
-            return unicode(str(self))
-        else:
-            return str(self)
+    # def __format__(self, format_spec):
+    #     if isinstance(format_spec, unicode):
+    #         return unicode(str(self))
+    #     else:
+    #         return str(self)
 
     def clear(self):
+        """Delete all keys in the rdict"""
         self.redis.delete(self.key)
 
     def copy(self):
@@ -704,36 +752,63 @@ class rdict(object):
 
     @classmethod
     def fromkeys(cls, redisugar, key, seq, value=None):
+        """Build a new rdict from keys
+        :param redisugar: redis.Redis() object
+        :param key: rdict key
+        :param seq: key sequence
+        :param value: init value in rdict
+        :return: rdict object
+        """
         rd = cls(redisugar, key)
-        for each in seq:
-            rd[each] = value
+        with rd.redis.pipeline() as pipe:
+            for each in seq:
+                # rd[each] = value
+                rd._raise_not_hashable(each)
+                pipe.hset(rd.key, each, value)
+            pipe.execute()
         return rd
 
     def get(self, key, default=None):
+        """Get value at the key or default if key not found
+        :param key: rdict key
+        :param default: default value if key not found
+        :return: value at the key or default
+        """
         return self._read(key) if self.__contains__(key) else default
 
     def keys(self):
+        """Return all keys in the rdict"""
         return self.redis.hkeys(self.key)
 
     def values(self):
+        """Return all values in the rdict"""
         return self.redis.hvals(self.key)
 
     def items(self):
+        """Return all k-v pair in the rdict"""
         return self.redis.hgetall(self.key)
 
     def iterkeys(self):
+        """Return an iterator of keys"""
         for each in self.redis.hscan_iter(self.key):
             yield each[0]
 
     def itervalues(self):
+        """Return an iterator of values"""
         for each in self.redis.hscan_iter(self.key):
             yield each[1]
 
     def iteritems(self):
+        """Return an iterator of k-v pairs"""
         for each in self.redis.hscan_iter(self.key):
             yield each
 
     def pop(self, key, *defaults):
+        """Return value at the key and delete the key
+        :param key: rdict key
+        :param defaults: default value if key not found
+        :return value: value at the key or default
+        """
         if len(defaults) > 1:
             raise TypeError('pop expected at most 2 arguments, got {0}'.format(1 + len(defaults)))
         try:
@@ -747,6 +822,7 @@ class rdict(object):
         return value
 
     def popitem(self):
+        """Pop a random k-v pair"""
         for key in self.iterkeys():
             break
         else:
@@ -756,6 +832,11 @@ class rdict(object):
         return key, value
 
     def setdefault(self, key, value=None):
+        """Return value at the key or set value to the key if key not found
+        :param key: rdict key
+        :param value: default value if key not found
+        :return: value at the ket or value
+        """
         if self.__contains__(key):
             return self._read(key)
         else:
@@ -763,6 +844,10 @@ class rdict(object):
             return str(value)
 
     def update(self, *args, **kwargs):
+        """Update rdict with sequence and keyword parameters
+        :param args: expect one argument
+        :param kwargs: k-v pairs
+        """
         len_args = len(args)
         if len_args == 1:
             iterable_or_mapping = args[0]
@@ -772,11 +857,20 @@ class rdict(object):
             iterable_or_mapping = None
         self._update(iterable_or_mapping, **kwargs)
 
-    def multi_set(self, *args):
-        raise NotImplemented
+    def multi_set(self, keys, *args):
+        """Get multiple values in order of keys and args
+        :param keys: a list of rdict keys
+        :type: list
+        :param args: rdict keys, will be appended to keys
+        :return: list of value at given keys and args
+        """
+        return self.redis.hmget(self.key, keys, *args)
 
-    def multi_get(self, *args):
-        raise NotImplemented
+    def multi_get(self, mapping):
+        """Set multiple k-v pairs
+        :param mapping: k-v pairs
+        """
+        self.redis.hmset(self.key, mapping)
 
     def incr_by(self, key, amount):
         """
