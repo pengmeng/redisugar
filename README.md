@@ -132,8 +132,6 @@ Warning & Notes
 TODO
 ----
  - add comparison methods for all data structures
- - use pipeline to optimize some operations
-
 
 Acknowledgement
 ---------------

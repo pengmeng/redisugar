@@ -10,6 +10,7 @@ class RediSugar(object):
     A wrapper for redis.Redis() object, supports database level operations (dict-like operations).
     """
     _Pool = {}
+    _STR_SUMMARY_LIMIT = 10
 
     @classmethod
     def getSugar(cls, host='localhost', port=6379, db=0):
@@ -20,6 +21,16 @@ class RediSugar(object):
             return r.ping() and cls(r)
         except redis.ConnectionError:
             raise RuntimeError('Cannot connect to redis server')
+
+    @classmethod
+    def set_str_summary_limit(cls, limit):
+        if limit <= 3:
+            raise ValueError('str summary limit should greater than 3')
+        RediSugar._STR_SUMMARY_LIMIT = limit
+
+    @classmethod
+    def str_summary_limit(cls):
+        return RediSugar._STR_SUMMARY_LIMIT
 
     def __init__(self, redis_instance):
         self.redis = redis_instance
@@ -300,7 +311,18 @@ class rlist(object):
         return '<redisugar.rlist object with key: ' + self.key + '>'
 
     def __str__(self):
-        return str(self.copy())
+        """Return a summary string of the rlist"""
+        _len = self.__len__()
+        if _len <= RediSugar.str_summary_limit():
+            summary = str(self.copy())
+        else:
+            with self.redis.pipeline() as pipe:
+                pipe.lindex(self.key, 1)
+                pipe.lindex(self.key, 2)
+                pipe.lindex(self.key, -1)
+                head_tail = pipe.execute()
+                summary = '[{}, {}, ..., {}]'.format(*head_tail)
+        return 'rlist {}, {}, {} elements in total'.format(self.key, summary, _len)
 
     def _check_index(self, item):
         """Check whether an index is valid
@@ -732,7 +754,18 @@ class rdict(object):
         return '<redisugar.rdict object with key: ' + self.key + '>'
 
     def __str__(self):
-        return str(self.copy())
+        """Return a summary string of rdict"""
+        _len = self.__len__()
+        if _len <= RediSugar.str_summary_limit():
+            summary_str = str(self.copy())
+        else:
+            summary = []
+            for pair in self.iteritems():
+                if len(summary) == RediSugar.str_summary_limit():
+                    break
+                summary.append(pair)
+            summary_str = '{' + ', '.join(': '.join(pair) for pair in summary) + ' ...}'
+        return 'rdict {}, {}, {} elements in total'.format(self.key, summary_str, _len)
 
     # def __format__(self, format_spec):
     #     if isinstance(format_spec, unicode):
@@ -965,7 +998,18 @@ class rset(object):
         return '<redisugar.rset object with key: ' + self.key + '>'
 
     def __str__(self):
-        return str(self.copy())
+        """Return a summary string of rset"""
+        _len = self.__len__()
+        if _len <= RediSugar.str_summary_limit():
+            summary_str = str(self.copy())
+        else:
+            summary = []
+            for item in self.__iter__():
+                if len(summary) == RediSugar.str_summary_limit():
+                    break
+                summary.append(item)
+            summary_str = 'str([{}, ...])'.format(', '.join(summary))
+        return 'rlist {}, {}, {} elements in total'.format(self.key, summary_str, _len)
 
     def __or__(self, other):
         """Return a new set with elements from the rset and the other.
