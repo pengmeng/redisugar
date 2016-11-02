@@ -10,7 +10,8 @@ class TestRediSugar(TestCase):
     def setUpClass(cls):
         cls.redisugar = RediSugar.get_sugar(db=1)
         keys = [key for key in cls.redisugar.keys() if key.startswith('test_')]
-        cls.redisugar.redis.delete(*keys)
+        if keys:
+            cls.redisugar.redis.delete(*keys)
 
     def test__set_get_item(self):
         self.redisugar['test_list'] = [1, 2, 3]
