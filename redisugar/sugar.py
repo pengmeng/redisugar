@@ -1356,7 +1356,7 @@ class rstr(object):
     redis string class
 
     Warning:
-        - Since python str object is immutable, it's make no sense to implement all python str interface for redis
+        - Since python str object is immutable, it makes no sense to implement all python str interface for redis
         string. This class only supports special redis string commands like INCR.
         - You will need this object, only if you want update a redis string without copying it into memory. If you
         want to use it like python str, just copy it to a str object, play, then update it back into redis.
@@ -1366,7 +1366,8 @@ class rstr(object):
     def __init__(self, redisugar, key, value=''):
         self.redis = redisugar.redis
         self.key = key
-        self.redis.set(key, value)
+        if value:
+            self.redis.set(key, value)
 
     @classmethod
     def multi_set(cls, redisugar, *args, **kwargs):

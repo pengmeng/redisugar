@@ -2,13 +2,13 @@ redisugar
 ==========
 [![Build Status](https://travis-ci.com/pengmeng/redisugar.svg?token=ns6e33dpnP1KMQ4NmfpJ&branch=master)](https://travis-ci.com/pengmeng/redisugar)  
 Pythonic redis interface based on redis-py  
-Main purpose of this project is provding pythonic redis (data structure) interfaces that are in consistent with python builtin data structures.  
-So you can use any supported redis data structures just like using builtin python library.  
-Currently support redis data structures are:  
+Main purpose of this project is provding pythonic redis (data structure) interfaces that are in consistent with python builtin data structures. So you can use any supported redis data structures just like using builtin python library.  
+Currently supporting redis data structures are:  
 
  - list
  - hash
  - set
+ - string
  
 For full [redis documentation](http://redis.io/documentation).
 
@@ -100,6 +100,29 @@ KeyError: '5'
 set(['1'])
 ```
 
+### redis rstr interface
+```
+>>> from redisugar import RediSugar, rstr
+>>> s = rstr(sugar, 'mystring', 'abc123')
+>>> str(s)
+'abc123'
+>>> s += 'def'
+>>> str(s)
+'abc123def'
+>>> s[3:6]
+'123'
+>>> s.set(s[3:6])
+>>> str(s)
+'123'
+>>> s.decrease(23)
+>>> str(s)
+'100'
+>>> s.set_range(1, '11')
+3
+>>> str(s)
+'111'
+```
+
 ### get inner redis object to obtain all redis-py commands
 ```
 >>> r = sugar.redis
@@ -128,12 +151,18 @@ Warning & Notes
 ### rset
  - only support str type at present, all other type will be converted to str
 
+### rstr
+ - Since python str object is immutable, it makes no sense to implement all python str interface for redis
+string. This class only supports special redis string commands like INCR.
+ - You will need this object, only if you want update a redis string without copying it into memory. If you
+want to use it like python str, just copy it to a str object, play, then update it back into redis.
+ - RediSugar\[key\] only return as python str object, you must explicitly create a rstr object.
+
 
 TODO
 ----
  - add comparison methods for all data structures
- - expire methods
- - key methods in RediSugar class
+
 
 Acknowledgement
 ---------------
