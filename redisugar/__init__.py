@@ -4,6 +4,7 @@ from sugar import (
     rlist,
     rdict,
     rset,
+    rstr,
 )
 
-__all__ = ['RediSugar', 'rlist', 'rdict', 'rset']
+__all__ = ['RediSugar', 'rlist', 'rdict', 'rset', 'rstr']

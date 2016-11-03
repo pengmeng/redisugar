@@ -1446,15 +1446,15 @@ class rstr(object):
         if isinstance(key, slice):
             start, stop, step = key.indices(self.__len__())
             self._check_index(start)
-            self._check_index(stop)
+            self._check_index(stop - 1)
             if step == 1:
                 # getrange(key, start, stop) will return start, stop inclusively
                 result_str = self.redis.getrange(self.key, start, stop - 1)
             else:
-                result = []
                 with self.redis.pipeline() as pipe:
                     for i in range(start, stop, step):
-                        result.append(pipe.getrange(self.key, i, i))
+                        pipe.getrange(self.key, i, i)
+                    result = pipe.execute()
                 result_str = ''.join(result)
             return result_str
         else:

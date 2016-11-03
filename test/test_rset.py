@@ -14,7 +14,8 @@ class TestRset(TestCase):
     @classmethod
     def tearDownClass(cls):
         keys = [key for key in list(cls.redisugar.redis.scan_iter()) if key.startswith('set_')]
-        cls.redisugar.redis.delete(*keys)
+        if keys:
+            cls.redisugar.redis.delete(*keys)
 
     def test__init(self):
         self.assertRaises(TypeError, rset, self.redisugar, 'set_dummy', 1)
