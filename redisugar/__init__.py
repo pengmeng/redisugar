@@ -7,4 +7,4 @@ from sugar import (
     rstr,
 )
 
-__all__ = ['RediSugar', 'rlist', 'rdict', 'rset', 'rstr']
+__all__ = ['RediSugar', 'rlist', 'rdict', 'rset', 'rstr', 'sorted_set']

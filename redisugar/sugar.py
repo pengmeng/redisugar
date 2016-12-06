@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import redis
+import collections
 from collections import Iterable
 from collections import Mapping
 from utils import *
@@ -206,7 +207,7 @@ class RediSugar(object):
             self.redis.bgsave()
 
 
-class rlist(object):
+class rlist(collections.MutableSequence):
     """
     redis list class
     """
@@ -368,10 +369,11 @@ class rlist(object):
         """
         if isinstance(key, slice):
             start, stop, step = key.indices(self.__len__())
-            result = []
-            for i in range(start, stop, step):
-                self._check_index(i)
-                result.append(self.dtype(self._read(i)))
+            with self.redis.pipeline() as pipe:
+                for i in range(start, stop, step):
+                    self._check_index(i)
+                    pipe.lindex(self.key, i)
+                result = [self.dtype(x) for x in pipe.execute()]
             return result
         else:
             self._check_index(key)
@@ -626,7 +628,7 @@ class rlist(object):
         self.redis.delete(self.key)
 
 
-class rdict(object):
+class rdict(collections.MutableMapping):
     """
     redis dict class
 
@@ -887,11 +889,13 @@ class rdict(object):
             self._write(key, value)
             return str(value)
 
-    def update(self, *args, **kwargs):
+    def update(*args, **kwds):
         """Update rdict with sequence and keyword parameters
         :param args: expect one argument
-        :param kwargs: k-v pairs
+        :param kwds: k-v pairs
         """
+        self = args[0]
+        args = args[1:]
         len_args = len(args)
         if len_args == 1:
             iterable_or_mapping = args[0]
@@ -899,7 +903,7 @@ class rdict(object):
             raise TypeError('update expected at most 1 (non-keyword) argument, got {0}'.format(len_args))
         else:
             iterable_or_mapping = None
-        self._update(iterable_or_mapping, **kwargs)
+        self._update(iterable_or_mapping, **kwds)
 
     def multi_get(self, keys, *args):
         """Get multiple values in order of keys and args
@@ -943,7 +947,7 @@ class rdict(object):
         return self.redis.hincrbyfloat(self.key, key, amount)
 
 
-class rset(object):
+class rset(collections.MutableSet):
     """
     redis set class
 
@@ -1023,8 +1027,8 @@ class rset(object):
                 if len(summary) == RediSugar.str_summary_limit():
                     break
                 summary.append(item)
-            summary_str = 'str([{}, ...])'.format(', '.join(summary))
-        return 'rlist {}, {}, {} elements in total'.format(self.key, summary_str, _len)
+            summary_str = 'rset([{}, ...])'.format(', '.join(summary))
+        return 'rset {}, {}, {} elements in total'.format(self.key, summary_str, _len)
 
     def __or__(self, other):
         """Return a new set with elements from the rset and the other.
@@ -1498,3 +1502,305 @@ class rstr(object):
         :return: length of the new string
         """
         return self.redis.setrange(self.key, offset, value)
+
+
+class sorted_set(collections.MutableSet, collections.MutableMapping):
+    """ Sorted Set data structure internally supported by redis, this class simply wrap redis-py z* APIs.
+    Note:
+        - Consider to implement set-like interfaces in future
+        - Sorted Set inherit collections.MutableMapping, therefore supporting dict-like interfaces
+    Warning:
+        - *_lex suffix methods are not implemented at this time
+    """
+
+    def __init__(self, redisugar, key, iterable=None):
+        self.redis = redisugar.redis
+        self.key = key
+        if iterable:
+            self.add(iterable)
+
+    @classmethod
+    def intersection_store(cls, redisugar, destination, keys, weights=None, aggregate=None, overwrite=True):
+        """Intersect multiple sorted sets specified by keys into destination
+        :param redisugar: RediSugar object
+        :param destination: destination key
+        :param keys: sorted set keys
+        :param weights: weights for each keys
+        :param aggregate: how scores are aggregated over sets, default 'SUM', choices are 'SUM', 'MIN', 'MAX'
+        :param overwrite: overwrite destination key if exists, default True
+        :return: destination sorted set length
+        """
+        if aggregate and aggregate not in ('SUM', 'MIN', 'MAX'):
+            raise ValueError('unsupport aggregate method: ' + str(aggregate))
+        if not overwrite and destination in redisugar:
+            raise ValueError('destination already exists: ' + destination)
+        if weights:
+            if len(keys) != len(weights):
+                raise ValueError('weights must have same length with keys')
+            keys = {x: y for x, y in zip(keys, weights)}
+        return redisugar.redis.zinterstore(destination, keys, aggregate=aggregate)
+
+    @classmethod
+    def union_store(cls, redisugar, destination, keys, weights=None, aggregate=None, overwrite=True):
+        """Union multiple sorted sets specified by keys into destination
+        :param redisugar: RediSugar object
+        :param destination: destination key
+        :param keys: sorted set keys
+        :param weights: weights for each keys
+        :param aggregate: how scores are aggregated over sets, default 'SUM', choices are 'SUM', 'MIN', 'MAX'
+        :param overwrite: overwrite destination key if exists, default True
+        :return: destination sorted set length
+        """
+        if aggregate and aggregate not in ('SUM', 'MIN', 'MAX'):
+            raise ValueError('unsupport aggregate method: ' + str(aggregate))
+        if not overwrite and destination in redisugar:
+            raise ValueError('destination already exists: ' + destination)
+        if weights:
+            if len(keys) != len(weights):
+                raise ValueError('weights must have same length with keys')
+            keys = {x: y for x, y in zip(keys, weights)}
+        return redisugar.redis.zunionstore(destination, keys, aggregate=aggregate)
+
+    def _make_writable(self, *args, **kwargs):
+        if len(args) == 0:
+            return kwargs
+        if len(args) == 1 and isinstance(args[0], Iterable):
+            iterable = args[0]
+        else:
+            iterable = args
+        try:
+            pair_dict = dict(iterable)
+        except TypeError as type_e:
+            if len(args) % 2 != 0:
+                raise ValueError('{} and cannot build dict from odd length args'.format(type_e.message))
+            else:
+                pair_dict = {iterable[i]: iterable[i + 1] for i in xrange(0, len(iterable), 2)}
+        pair_dict.update(kwargs)
+        return pair_dict
+
+    def _write(self, pair_dict):
+        """Write a dict into redis sorted set
+        :param pair_dict: {key: score}
+        :type pair_dict: dict
+        """
+        if not pair_dict:
+            return
+        self.redis.zadd(self.key, **pair_dict)
+
+    def _delete(self, *values):
+        """Delete values from sorted set"""
+        if not values:
+            return
+        self.redis.zrem(self.key, *values)
+
+    def __iter__(self):
+        """Return an iterator over all elements in the sorted set"""
+        return self.redis.zscan_iter(self.key)
+
+    def __len__(self):
+        """Return length of the sorted set"""
+        return self.redis.zcard(self.key)
+
+    def __contains__(self, x):
+        """Check whether a element is in the sorted set, in a simple way"""
+        return self.redis.zscore(self.key, x) is not None
+
+    def __repr__(self):
+        return '<redisugar.sorted_set object with key: ' + self.key + '>'
+
+    def __str__(self):
+        """Return a summary string of sorted set"""
+        _len = self.__len__()
+        if _len <= RediSugar.str_summary_limit():
+            summary_str = 'set([{}, ...])'.format(', '.join(str(x) for x in self.copy()))
+        else:
+            summary = []
+            for item in self.__iter__():
+                if len(summary) == RediSugar.str_summary_limit():
+                    break
+                summary.append(item)
+            summary_str = 'set([{}, ...])'.format(', '.join(str(x) for x in summary))
+        return 'sorted_set {}, {}, {} elements in total'.format(self.key, summary_str, _len)
+
+    def copy(self):
+        """Return a copy of sorted_set as a list if (value, score) pairs"""
+        return list(self.__iter__())
+
+    def clear(self):
+        """Remove all elements from the sorted set"""
+        self.redis.delete(self.key)
+
+    def discard(self, value):
+        """Delete an element by key"""
+        raise_not_hashable(value)
+        self._delete(value)
+
+    def remove(self, value):
+        """Delete an element by key, raise KeyError if not found"""
+        raise_not_hashable(value)
+        if not self.__contains__(value):
+            raise KeyError(value)
+        else:
+            self._delete(value)
+
+    def add(self, *values, **kwargs):
+        """Add element pairs into sorted set, pairs will be built as dict(values).update(kwargs) in an acceptable way.
+        :param values: can contain one iterable or be an iterable itself that can be built into a dict (or even length)
+        :param kwargs: element pairs as a dict
+        """
+        pair_dict = self._make_writable(*values, **kwargs)
+        [raise_not_hashable(x) for x in pair_dict]
+        self._write(pair_dict)
+
+    def __setitem__(self, key, value):
+        """Provides python dict-like set syntax sugar
+        :param key: sorted set value
+        :param value: score of the key
+        """
+        if isinstance(key, (str, unicode)):
+            self.redis.zadd(self.key, key, value)
+        else:
+            raise TypeError('set syntax expected str/unicode key, got {}'.format(get_type(key)))
+
+    def score(self, value, *more):
+        """Return the scores of given values
+        :param value: element value
+        :param more: if more values are given, return a list of scores
+        :return: single score or a list of scores
+        """
+        if len(more) > 0:
+            with self.redis.pipeline() as pipe:
+                pipe.zscore(self.key, value)
+                for item in more:
+                    pipe.zscore(self.key, item)
+                result = pipe.execute()
+            return result
+        else:
+            return self.redis.zscore(self.key, value)
+
+    def incr_by(self, value, increment):
+        """Increase score of value by increment"""
+        self.redis.zincrby(self.key, value, increment)
+
+    def rank(self, value, reverse=False):
+        """Returns a 0-based value indicating the rank of value in sorted_set
+        :param value: sorted set element
+        :param reverse: if set True, scores ordered from high to low
+        """
+        if not reverse:
+            return self.redis.zrank(self.key, value)
+        else:
+            return self.redis.zrevrank(self.key, value)
+
+    def count(self, _min, _max):
+        """Return number of elements within min max inclusively,
+        _min, _max should be int or float
+        """
+        return self.redis.zcount(self.key, _min, _max)
+
+    def count_by_lex(self, _min, _max):
+        raise NotImplementedError
+
+    def range(self, start, stop, reverse=False, withscores=False, score_cast_func=None):
+        """Return range with rank as index, behaves like python slice operator.
+        Provides slice syntax sugar sorted_set[1:5:1], only for range().
+        :param start: start index, int, inclusive
+        :param stop: stop index, int, exclusive
+        :param reverse: if set True, scores ordered from high to low
+        :param withscores: if set True, return elements with score (value, score)
+        :param score_cast_func: callable object to cast the score return value.
+        Note that, score is a string in redis and this method will convert it to float before pass into func.
+        So this func will be called, score_cast_func(float(score)), if you really want score as a string, convert it
+        explicitly in yout func.
+        """
+        # let range behaves like python slice
+        stop -= 1
+        score_cast_func = lambda x: score_cast_func(float(x)) if score_cast_func else None
+        return self.redis.zrange(
+            self.key,
+            start,
+            stop,
+            desc=reverse,
+            withscores=withscores,
+            score_cast_func=score_cast_func
+        )
+
+    def __getitem__(self, key):
+        """Provides slice syntax sugar for rank index range access"""
+        if isinstance(key, int):
+            _list = self.redis.zrange(self.key, key, key)
+            return _list and _list[0]
+        else:
+            start, stop, step = key.indices(self.__len__())
+            if step == 1:
+                stop -= 1
+                _list = self.redis.zrange(self.key, start, stop)
+            else:
+                with self.redis.pipeline() as pipe:
+                    for i in range(start, stop, step):
+                        pipe.zrange(self.key, i, i)
+                    _list = [x[0] for x in pipe.execute() if x]
+            return _list
+
+    def range_by_lex(self, _min, _max, reverse=False):
+        raise NotImplementedError
+
+    def range_by_score(self, _min, _max, start=None, num=None, reverse=False, withscores=False, score_cast_func=None):
+        """Return a range of values with scores between min and max, inclusively.
+        :param _min: min score, inclusively
+        :param _max: max score, inclusively
+        :param start: slice start, if given, will return slice of the range
+        :param num: slice length, as above
+        :param reverse: if set True, scores ordered from high to low
+        :param withscores: if set True, return elements with score (value, score)
+        :param score_cast_func: as range
+        :return: list of elements
+        """
+        score_cast_func = lambda x: score_cast_func(float(x)) if score_cast_func else None
+        if not reverse:
+            range_func = self.redis.zrangebyscore
+        else:
+            range_func = self.redis.zrevrangebyscore
+        return range_func(
+            self.key,
+            _min,
+            _max,
+            start=start,
+            num=num,
+            withscores=withscores,
+            score_cast_func=score_cast_func
+        )
+
+    def remove_range(self, _min, _max):
+        """Remove elements with rank as index, behaves like python slice opration
+        :param _min: start rank, inclusively
+        :param _max: end rank, exclusively
+        """
+        _max -= 1
+        return self.redis.zremrangebyrank(_min, _max)
+
+    def __delitem__(self, key):
+        """Provides slice syntax sugar for rank index range delete"""
+        if isinstance(key, int):
+            return self.redis.zremrangebyrank(key, key)
+        else:
+            start, stop, step = key.indices(self.__len__())
+            if step == 1:
+                stop -= 1
+                return self.redis.zremrangebyrank(start, stop)
+            else:
+                with self.redis.pipeline() as pipe:
+                    for i in range(start, stop, step):
+                        pipe.zremrangebyrank(i, i)
+                    return sum(pipe.execute())
+
+    def remove_range_by_lex(self, _min, _max):
+        raise NotImplementedError
+
+    def remove_range_by_score(self, _min, _max):
+        """Remove all elements with scores between min and max, inclusively
+        :param _min: min score, inclusively
+        :param _max: max score, inclusively
+        :return: number of elements removed
+        """
+        return self.redis.zremrangebyscore(_min, _max)

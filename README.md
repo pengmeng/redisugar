@@ -1,15 +1,15 @@
 redisugar
 ==========
-[![Build Status](https://travis-ci.com/pengmeng/redisugar.svg?token=ns6e33dpnP1KMQ4NmfpJ&branch=master)](https://travis-ci.com/pengmeng/redisugar)  
-Pythonic redis interface based on redis-py  
-Main purpose of this project is provding pythonic redis (data structure) interfaces that are in consistent with python builtin data structures. So you can use any supported redis data structures just like using builtin python library.  
-Currently supporting redis data structures are:  
+[![Build Status](https://travis-ci.com/pengmeng/redisugar.svg?token=ns6e33dpnP1KMQ4NmfpJ&branch=master)](https://travis-ci.com/pengmeng/redisugar)
+Pythonic redis interface based on redis-py
+Main purpose of this project is provding pythonic redis (data structure) interfaces that are in consistent with python builtin data structures. So you can use any supported redis data structures just like using builtin python library.
+Currently supporting redis data structures are:
 
  - list
  - hash
  - set
  - string
- 
+
 For full [redis documentation](http://redis.io/documentation).
 
 Getting Started
@@ -17,7 +17,7 @@ Getting Started
 ### database level interface
 ```
 >>> from redisugar import RediSugar
->>> sugar = RediSugar.getSugar(db=1)
+>>> sugar = RediSugar.get_sugar(db=1)
 >>> sugar['a'] = '1'
 >>> sugar['a']
 '1'
@@ -147,7 +147,7 @@ Warning & Notes
  - None will be converted to 'None' in redis
  - builtin dict methods (viewitems(), viewkeys(), viewvalues()) that return view object are not implemented
  - rdict.copy() method is an alias of rdict.items() method but slightly different from dict.copy()
- 
+
 ### rset
  - only support str type at present, all other type will be converted to str
 
@@ -166,4 +166,4 @@ TODO
 
 Acknowledgement
 ---------------
- - [redis-py](https://github.com/andymccurdy/redis-py) by Andy McCurdy  
+ - [redis-py](https://github.com/andymccurdy/redis-py) by Andy McCurdy
