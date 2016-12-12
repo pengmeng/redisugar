@@ -1,7 +1,6 @@
 redisugar
 ==========
-[![Build Status](https://travis-ci.com/pengmeng/redisugar.svg?token=ns6e33dpnP1KMQ4NmfpJ&branch=master)]
-(https://travis-ci.com/pengmeng/redisugar)  
+[![Build Status](https://travis-ci.org/pengmeng/redisugar.svg?branch=master)](https://travis-ci.org/pengmeng/redisugar)  
 Pythonic redis interface based on redis-py  
 Main purpose of this project is provding pythonic redis (data structure) interfaces that are in consistent with
 python builtin data structures. So you can use any supported redis data structures just like using builtin python
@@ -12,6 +11,7 @@ Currently supporting redis data structures are:
  - hash
  - set
  - string
+ - sorted set
 
 For full [redis documentation](http://redis.io/documentation).
 
