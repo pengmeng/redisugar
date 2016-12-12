@@ -89,6 +89,8 @@ class RediSugar(object):
             value = rdict(self, key)
         elif _type == 'set':
             value = rset(self, key)
+        elif _type == 'zset':
+            value = sorted_set(self, key)
         else:
             value = self.redis.get(key)
         return value
@@ -1508,7 +1510,7 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
     """ Sorted Set data structure internally supported by redis, this class simply wrap redis-py z* APIs.
     Note:
         - Consider to implement set-like interfaces in future
-        - Sorted Set inherit collections.MutableMapping, therefore supporting dict-like interfaces
+        - Sorted Set also inherit collections.MutableMapping, therefore supporting dict-like interfaces
     Warning:
         - *_lex suffix methods are not implemented at this time
     """
@@ -1524,44 +1526,49 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
         """Intersect multiple sorted sets specified by keys into destination
         :param redisugar: RediSugar object
         :param destination: destination key
-        :param keys: sorted set keys
+        :param keys: sorted set represented by str or sorted_set object
         :param weights: weights for each keys
         :param aggregate: how scores are aggregated over sets, default 'SUM', choices are 'SUM', 'MIN', 'MAX'
         :param overwrite: overwrite destination key if exists, default True
-        :return: destination sorted set length
+        :return: destination sorted set
         """
         if aggregate and aggregate not in ('SUM', 'MIN', 'MAX'):
             raise ValueError('unsupport aggregate method: ' + str(aggregate))
         if not overwrite and destination in redisugar:
             raise ValueError('destination already exists: ' + destination)
+        keys = [key.key if isinstance(key, sorted_set) else key for key in keys]
         if weights:
             if len(keys) != len(weights):
                 raise ValueError('weights must have same length with keys')
             keys = {x: y for x, y in zip(keys, weights)}
-        return redisugar.redis.zinterstore(destination, keys, aggregate=aggregate)
+        redisugar.redis.zinterstore(destination, keys, aggregate=aggregate)
+        return sorted_set(redisugar, destination)
 
     @classmethod
     def union_store(cls, redisugar, destination, keys, weights=None, aggregate=None, overwrite=True):
         """Union multiple sorted sets specified by keys into destination
         :param redisugar: RediSugar object
         :param destination: destination key
-        :param keys: sorted set keys
+        :param keys: sorted set represented by str or sorted_set object
         :param weights: weights for each keys
         :param aggregate: how scores are aggregated over sets, default 'SUM', choices are 'SUM', 'MIN', 'MAX'
         :param overwrite: overwrite destination key if exists, default True
-        :return: destination sorted set length
+        :return: destination sorted set
         """
         if aggregate and aggregate not in ('SUM', 'MIN', 'MAX'):
             raise ValueError('unsupport aggregate method: ' + str(aggregate))
         if not overwrite and destination in redisugar:
             raise ValueError('destination already exists: ' + destination)
+        keys = [key.key if isinstance(key, sorted_set) else key for key in keys]
         if weights:
             if len(keys) != len(weights):
                 raise ValueError('weights must have same length with keys')
             keys = {x: y for x, y in zip(keys, weights)}
-        return redisugar.redis.zunionstore(destination, keys, aggregate=aggregate)
+        redisugar.redis.zunionstore(destination, keys, aggregate=aggregate)
+        return sorted_set(redisugar, destination)
 
-    def _make_writable(self, *args, **kwargs):
+    @classmethod
+    def _make_writable(cls, *args, **kwargs):
         if len(args) == 0:
             return kwargs
         if len(args) == 1 and isinstance(args[0], Iterable):
@@ -1570,7 +1577,7 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
             iterable = args
         try:
             pair_dict = dict(iterable)
-        except TypeError as type_e:
+        except (TypeError, ValueError) as type_e:
             if len(args) % 2 != 0:
                 raise ValueError('{} and cannot build dict from odd length args'.format(type_e.message))
             else:
@@ -1612,7 +1619,7 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
         """Return a summary string of sorted set"""
         _len = self.__len__()
         if _len <= RediSugar.str_summary_limit():
-            summary_str = 'set([{}, ...])'.format(', '.join(str(x) for x in self.copy()))
+            summary_str = 'set([{}])'.format(', '.join(str(x) for x in self.copy()))
         else:
             summary = []
             for item in self.__iter__():
@@ -1693,7 +1700,7 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
             return self.redis.zrevrank(self.key, value)
 
     def count(self, _min, _max):
-        """Return number of elements within min max inclusively,
+        """Return number of elements whose score within min max inclusively,
         _min, _max should be int or float
         """
         return self.redis.zcount(self.key, _min, _max)
@@ -1714,6 +1721,8 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
         explicitly in yout func.
         """
         # let range behaves like python slice
+        if stop == 0:
+            return []
         stop -= 1
         score_cast_func = lambda x: score_cast_func(float(x)) if score_cast_func else None
         return self.redis.zrange(
@@ -1730,8 +1739,10 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
         if isinstance(key, int):
             _list = self.redis.zrange(self.key, key, key)
             return _list and _list[0]
-        else:
+        elif isinstance(key, slice):
             start, stop, step = key.indices(self.__len__())
+            if stop == 0:
+                return []
             if step == 1:
                 stop -= 1
                 _list = self.redis.zrange(self.key, start, stop)
@@ -1741,6 +1752,11 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
                         pipe.zrange(self.key, i, i)
                     _list = [x[0] for x in pipe.execute() if x]
             return _list
+        elif isinstance(key, (str, unicode)):
+            # for self.score() access
+            return self.redis.zscore(self.key, key)
+        else:
+            raise TypeError('set syntax expected int/slice/str/unicode key, got {}'.format(get_type(key)))
 
     def range_by_lex(self, _min, _max, reverse=False):
         raise NotImplementedError
@@ -1776,23 +1792,29 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
         :param _min: start rank, inclusively
         :param _max: end rank, exclusively
         """
+        if _max == 0:
+            return 0
         _max -= 1
-        return self.redis.zremrangebyrank(_min, _max)
+        return self.redis.zremrangebyrank(self.key, _min, _max)
 
     def __delitem__(self, key):
         """Provides slice syntax sugar for rank index range delete"""
         if isinstance(key, int):
-            return self.redis.zremrangebyrank(key, key)
+            self.redis.zremrangebyrank(self.key, key, key)
         else:
             start, stop, step = key.indices(self.__len__())
+            if stop == 0:
+                return 0
             if step == 1:
                 stop -= 1
-                return self.redis.zremrangebyrank(start, stop)
+                self.redis.zremrangebyrank(self.key, start, stop)
             else:
                 with self.redis.pipeline() as pipe:
+                    count = 0
                     for i in range(start, stop, step):
-                        pipe.zremrangebyrank(i, i)
-                    return sum(pipe.execute())
+                        pipe.zremrangebyrank(self.key, i - count, i - count)
+                        count += 1
+                    pipe.execute()
 
     def remove_range_by_lex(self, _min, _max):
         raise NotImplementedError
@@ -1803,4 +1825,4 @@ class sorted_set(collections.MutableSet, collections.MutableMapping):
         :param _max: max score, inclusively
         :return: number of elements removed
         """
-        return self.redis.zremrangebyscore(_min, _max)
+        return self.redis.zremrangebyscore(self.key, _min, _max)

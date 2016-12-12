@@ -1,8 +1,11 @@
 redisugar
 ==========
-[![Build Status](https://travis-ci.com/pengmeng/redisugar.svg?token=ns6e33dpnP1KMQ4NmfpJ&branch=master)](https://travis-ci.com/pengmeng/redisugar)
-Pythonic redis interface based on redis-py
-Main purpose of this project is provding pythonic redis (data structure) interfaces that are in consistent with python builtin data structures. So you can use any supported redis data structures just like using builtin python library.
+[![Build Status](https://travis-ci.com/pengmeng/redisugar.svg?token=ns6e33dpnP1KMQ4NmfpJ&branch=master)]
+(https://travis-ci.com/pengmeng/redisugar)  
+Pythonic redis interface based on redis-py  
+Main purpose of this project is provding pythonic redis (data structure) interfaces that are in consistent with
+python builtin data structures. So you can use any supported redis data structures just like using builtin python
+library.  
 Currently supporting redis data structures are:
 
  - list
@@ -123,6 +126,28 @@ set(['1'])
 '111'
 ```
 
+### redis sorted_set / rzset interface
+```
+from redisugar import RediSugar, rzset
+>>> rzset
+<class 'redisugar.sugar.sorted_set'>
+>>> data = [('a', 1), ('b', 2), ('c', 3), ('d', 4)]
+>>> zs = rzset(sugar, 'myrzset', data)
+>>> print(zs)
+sorted_set myrzset, set([('a', 1.0), ('b', 2.0), ('c', 3.0), ('d', 4.0)]), 4 elements in total
+>>> 'a' in zs
+True
+>>> zs['a'] # get score by value
+1.0
+>>> zs[2] # get value by rank
+'c'
+>>> zs[:2] # get range by rank
+['a', 'b']
+>>> del zs[1:3] # remove range by rank
+>>> print(zs)
+sorted_set myrzset, set([('a', 1.0), ('d', 4.0)]), 2 elements in total
+```
+
 ### get inner redis object to obtain all redis-py commands
 ```
 >>> r = sugar.redis
@@ -158,10 +183,16 @@ string. This class only supports special redis string commands like INCR.
 want to use it like python str, just copy it to a str object, play, then update it back into redis.
  - RediSugar\[key\] only return as python str object, you must explicitly create a rstr object.
 
+### rzset / sorted_set
+ - Consider to implement set-like interfaces in future
+ - Sorted Set also inherit collections.MutableMapping, therefore supporting dict-like interfaces
+ - *_lex suffix methods are not implemented at this time
+
 
 TODO
 ----
  - add comparison methods for all data structures
+ - implement set-like interfaces for rzset class
 
 
 Acknowledgement
